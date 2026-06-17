@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --ring: theme('colors.accent.500');
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-ink-50 text-ink-900 font-sans antialiased;
+  font-feature-settings: 'cv05' 1, 'ss01' 1;
+  overscroll-behavior-y: none;
+}
+
+/* Tipografia de cifras tabulares para precios/montos */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Scrollbar discreta estilo SaaS */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-ink-200 rounded-full border-2 border-solid border-transparent bg-clip-content;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ink-300;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus visible consistente */
+.focusable:focus-visible {
+  @apply outline-none ring-2 ring-accent-500/40 ring-offset-1 ring-offset-white;
+}
+
+/* Layout seguro para notch en moviles */
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 0px);
+}
+
+/* Textura sutil de fondo (grano fino, sin gradientes chillones) */
+.bg-grain {
+  background-image: radial-gradient(circle at 1px 1px, rgba(14, 14, 13, 0.03) 1px, transparent 0);
+  background-size: 22px 22px;
+}
+
+/* Impresion de ticket: aisla #ticket-imprimible y oculta el resto */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #ticket-imprimible,
+  #ticket-imprimible * {
+    visibility: visible;
+  }
+  #ticket-imprimible {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    width: 80mm;
+    max-width: 80mm;
+    border: none !important;
+    padding: 4mm 3mm;
+    color: #000;
+    font-size: 12px;
+  }
+}
+
+@page {
+  size: 80mm auto;
+  margin: 0;
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-ink-100 rounded-2xl shadow-card;
+  }
+  .label {
+    @apply text-[0.7rem] font-semibold uppercase tracking-wider text-ink-400;
+  }
+  .input {
+    @apply w-full rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-sm text-ink-900
+           placeholder:text-ink-300 transition focusable;
+  }
+  .input:hover {
+    @apply border-ink-300;
+  }
+}
