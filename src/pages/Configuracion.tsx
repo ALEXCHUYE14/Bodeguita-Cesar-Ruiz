@@ -34,7 +34,7 @@ export function Configuracion() {
   </style>
 </head>
 <body>
-  <div class="center bold" style="font-size:14px;margin-bottom:4px;">BODEGUITA JULI</div>
+  <div class="center bold" style="font-size:14px;margin-bottom:4px;">${BRAND.nombre.toUpperCase()}</div>
   <div class="center" style="font-size:10px;margin-bottom:8px;">Sistema de Gestión Comercial</div>
   <div class="line"></div>
   <div class="center bold" style="margin:6px 0;">*** TICKET DE PRUEBA ***</div>
@@ -127,7 +127,7 @@ export function Configuracion() {
         </div>
         <div className="divide-y divide-ink-50">
           {[
-            { k: 'Aplicación', v: 'Bodeguita Juli POS' },
+            { k: 'Aplicación', v: `${BRAND.nombre} POS` },
             { k: 'Versión', v: import.meta.env.VITE_APP_VERSION ?? '1.0.0' },
             { k: 'Entorno', v: import.meta.env.MODE === 'production' ? 'Producción' : 'Desarrollo' },
             { k: 'Navegador', v: navigator.userAgent.split(' ').slice(-2).join(' ') },

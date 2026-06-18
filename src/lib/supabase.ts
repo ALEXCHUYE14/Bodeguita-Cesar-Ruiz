@@ -6,7 +6,7 @@ const anonKey: string = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 
 if (!url || !anonKey) {
   console.error(
-    '[Bodeguita Juli] Faltan VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY. ' +
+    '[Bodeguita Cesar Ruiz] Faltan VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY. ' +
       'Configura estas variables en el panel de Vercel (Settings → Environment Variables).',
   )
 }

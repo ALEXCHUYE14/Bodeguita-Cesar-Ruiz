@@ -5,7 +5,7 @@
  */
 export const BRAND = {
   /** Nombre de la tienda (aparece en sidebar, login, ticket, PDF) */
-  nombre: 'Bodeguita Juli',
+  nombre: 'Bodeguita Cesar Ruiz',
 
   /**
    * Nombre del operador principal (lo que se muestra en el saludo del POS,
@@ -13,7 +13,7 @@ export const BRAND = {
    * Se aplica cuando el rol del usuario autenticado es "administrador".
    * Los cajeros regulares muestran su propio nombre de perfil.
    */
-  operador: 'Juli',
+  operador: 'Cesar Ruiz',
 
   /** Número de WhatsApp para soporte (formato internacional sin +) */
   whatsappSoporte: '51924996961',

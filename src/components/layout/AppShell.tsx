@@ -11,7 +11,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const items = NAV.filter((i) => !i.soloAdmin || esAdmin)
 
-  // El admin muestra el operador de marca ("Juli"); los cajeros muestran su primer nombre
+  // El admin muestra el operador de marca ("Cesar Ruiz"); los cajeros muestran su primer nombre
   const nombreDisplay =
     perfil?.rol === 'administrador'
       ? BRAND.operador
@@ -32,7 +32,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Store className="size-5" />
           </div>
           <div className="leading-tight">
-            <p className="font-display text-[0.95rem] font-bold text-ink-900">Bodeguita Juli</p>
+            <p className="font-display text-[0.95rem] font-bold text-ink-900">{BRAND.nombre}</p>
             <p className="text-[0.7rem] font-medium text-ink-400">Gestion Comercial</p>
           </div>
         </div>
@@ -84,7 +84,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="grid size-8 place-items-center rounded-lg bg-ink-900 text-white">
             <Store className="size-[18px]" />
           </div>
-          <span className="font-display text-base font-bold text-ink-900">Bodeguita Juli</span>
+          <span className="font-display text-base font-bold text-ink-900">{BRAND.nombre}</span>
         </div>
         <button
           onClick={salir}

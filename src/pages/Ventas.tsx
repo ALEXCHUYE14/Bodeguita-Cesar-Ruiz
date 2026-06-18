@@ -9,6 +9,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { BRAND } from '@/config/brand'
 import { useAuth } from '@/context/AuthContext'
 import { useCajaCtx } from '@/context/CajaContext'
 import { Card, Badge, Button, Spinner } from '@/components/ui/Button'
@@ -547,7 +548,7 @@ function TicketReprint({
         className="rounded-xl border border-dashed border-ink-200 p-4 font-sans text-sm"
       >
         <div className="mb-3 text-center">
-          <p className="font-display text-base font-bold">BODEGUITA JULI</p>
+          <p className="font-display text-base font-bold">{BRAND.nombre.toUpperCase()}</p>
           <p className="text-xs text-ink-400">{fechaHora(venta.creado_en)}</p>
           <p className="text-xs text-ink-400">Cajero: {venta.cajero_nombre ?? '-'}</p>
           <p className="text-xs text-ink-400">Comprobante #{venta.numero}</p>

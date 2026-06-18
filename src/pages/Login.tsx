@@ -12,7 +12,7 @@ const WA_SOPORTE = `https://wa.me/${BRAND.whatsappSoporte}?text=Hola,%20tengo%20
    El layout (width/height/display) lo controla el CSS class .login-left-col.
 ───────────────────────────────────────────────────────────────────────────── */
 const leftColBgStyle: React.CSSProperties = {
-  backgroundImage: "url('/img/tienda.jpeg')",
+  backgroundImage: "url('/img/tienda.png')",
   backgroundSize: 'cover',
   backgroundPosition: 'center',
   backgroundRepeat: 'no-repeat',
@@ -155,7 +155,7 @@ export function Login() {
             {/* Logo interno superior — centrado con esquinas redondeadas */}
             <div style={{ textAlign: 'center', marginBottom: '20px' }}>
               <img
-                src="/img/logo.jpeg"
+                src="/img/logo.png"
                 alt={BRAND.nombre}
                 style={{
                   maxHeight: '80px',

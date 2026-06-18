@@ -2,6 +2,7 @@ import { Printer, Check } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { money, fechaHora } from '@/utils/format'
+import { BRAND } from '@/config/brand'
 import type { ItemCarrito, Venta } from '@/types/database'
 
 const ETIQUETA: Record<string, string> = {
@@ -199,7 +200,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
 <body>
 
   <div class="header">
-    <div class="nombre-negocio">BODEGUITA JULI</div>
+    <div class="nombre-negocio">${BRAND.nombre.toUpperCase()}</div>
     <div class="sub-header">${fechaHora(venta.creado_en)}</div>
     <div class="sub-header">Cajero: ${venta.cajero_nombre ?? '-'}</div>
     <div class="ticket-num">Ticket N° ${venta.numero}</div>
@@ -287,7 +288,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
       <div className="rounded-xl border border-dashed border-ink-200 bg-white p-4 font-mono text-[0.75rem] leading-relaxed">
         {/* Cabecera */}
         <div className="mb-2 text-center">
-          <p className="text-sm font-black tracking-wide">BODEGUITA JULI</p>
+          <p className="text-sm font-black tracking-wide">{BRAND.nombre.toUpperCase()}</p>
           <p className="text-ink-400 text-[0.7rem]">{fechaHora(venta.creado_en)}</p>
           <p className="text-ink-400 text-[0.7rem]">Cajero: {venta.cajero_nombre ?? '-'}</p>
           <p className="font-bold text-[0.75rem]">Ticket N° {venta.numero}</p>

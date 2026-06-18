@@ -13,6 +13,7 @@ import {
   Copy,
 } from 'lucide-react'
 import { useClientes } from '@/hooks/useClientes'
+import { BRAND } from '@/config/brand'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -126,7 +127,7 @@ export function Clientes() {
   }
 
   function mensajeDeuda(c: ClienteCredito): string {
-    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *Bodeguita Juli*. Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
+    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *${BRAND.nombre}*. Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
   }
 
   function abrirWhatsApp(c: ClienteCredito) {
