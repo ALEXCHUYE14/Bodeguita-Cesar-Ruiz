@@ -1,4 +1,4 @@
-// Tipos del dominio del sistema Bodeguita Cesar Ruiz
+// Tipos del dominio del sistema Comercial Ruiz
 
 export type Rol = 'administrador' | 'cajero'
 export type MetodoPago = 'efectivo' | 'yape' | 'fiado'

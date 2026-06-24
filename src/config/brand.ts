@@ -5,7 +5,7 @@
  */
 export const BRAND = {
   /** Nombre de la tienda (aparece en sidebar, login, ticket, PDF) */
-  nombre: 'Bodeguita Cesar Ruiz',
+  nombre: 'Comercial Ruiz',
 
   /**
    * Nombre del operador principal (lo que se muestra en el saludo del POS,
