@@ -18,6 +18,14 @@ interface Props {
   onGuardado: () => void
 }
 
+function mensajeDeError(e: unknown): string {
+  if (e instanceof Error) {
+    const hint = (e as { hint?: string }).hint
+    return hint ? `${e.message} (${hint})` : e.message
+  }
+  return 'Error al guardar'
+}
+
 const vacio = {
   sku: '',
   nombre: '',
@@ -121,17 +129,16 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       unidades_por_caja: tieneCaja ? (parseInt(f.unidades_por_caja) || null) : null,
       precio_venta_caja: tieneCaja ? (parseFloat(f.precio_venta_caja) || null) : null,
     }
+
+    // Guarda primero los datos del producto. La foto se sube después y por
+    // separado: si falla la subida (ej. bucket de Storage mal configurado),
+    // el producto ya guardado no debe perderse ni reportarse como error.
+    let productoId: string
     try {
       if (producto) {
         const { error } = await supabase.from('productos').update(payload).eq('id', producto.id)
         if (error) throw error
-        if (imageFile) {
-          const url = await subir(imageFile, producto.id)
-          await supabase.from('productos').update({ image_url: url }).eq('id', producto.id)
-        } else if (f.image_url === '' && producto.image_url) {
-          await supabase.from('productos').update({ image_url: null }).eq('id', producto.id)
-        }
-        toast.exito('Producto actualizado')
+        productoId = producto.id
       } else {
         const { data, error } = await supabase
           .from('productos')
@@ -139,19 +146,29 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
           .select('id')
           .single()
         if (error) throw error
-        if (imageFile && data) {
-          const url = await subir(imageFile, data.id)
-          await supabase.from('productos').update({ image_url: url }).eq('id', data.id)
-        }
-        toast.exito('Producto creado')
+        productoId = data.id
       }
-      onGuardado()
-      onClose()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Error al guardar'
+      const msg = mensajeDeError(e)
       toast.error(msg.includes('duplicate') ? 'Ese SKU ya existe.' : msg)
+      setGuardando(false)
+      return
+    }
+
+    try {
+      if (imageFile) {
+        const url = await subir(imageFile, productoId)
+        await supabase.from('productos').update({ image_url: url }).eq('id', productoId)
+      } else if (producto && f.image_url === '' && producto.image_url) {
+        await supabase.from('productos').update({ image_url: null }).eq('id', productoId)
+      }
+      toast.exito(producto ? 'Producto actualizado' : 'Producto creado')
+    } catch (e) {
+      toast.error(`Producto guardado, pero la foto no se pudo subir: ${mensajeDeError(e)}`)
     } finally {
       setGuardando(false)
+      onGuardado()
+      onClose()
     }
   }
 

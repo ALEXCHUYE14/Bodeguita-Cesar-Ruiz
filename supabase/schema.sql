@@ -318,6 +318,32 @@ create table if not exists public.mermas (
 
 create index if not exists idx_mermas_fecha on public.mermas (creado_en desc);
 
+-- ----------------------------------------------------------------------------
+-- 15. STORAGE - BUCKET DE FOTOS DE PRODUCTOS
+-- ----------------------------------------------------------------------------
+-- El frontend (useProductoImagen.ts) sube las fotos a este bucket y usa
+-- getPublicUrl(), por lo que debe existir y ser publico para lectura.
+insert into storage.buckets (id, name, public)
+values ('product-images', 'product-images', true)
+on conflict (id) do nothing;
+
+drop policy if exists product_images_select on storage.objects;
+create policy product_images_select on storage.objects for select
+  using (bucket_id = 'product-images');
+
+drop policy if exists product_images_insert on storage.objects;
+create policy product_images_insert on storage.objects for insert
+  to authenticated with check (bucket_id = 'product-images');
+
+drop policy if exists product_images_update on storage.objects;
+create policy product_images_update on storage.objects for update
+  to authenticated using (bucket_id = 'product-images')
+  with check (bucket_id = 'product-images');
+
+drop policy if exists product_images_delete on storage.objects;
+create policy product_images_delete on storage.objects for delete
+  to authenticated using (bucket_id = 'product-images');
+
 -- ============================================================================
 -- FUNCIONES RPC (invocadas desde el frontend con supabase.rpc())
 -- ============================================================================
