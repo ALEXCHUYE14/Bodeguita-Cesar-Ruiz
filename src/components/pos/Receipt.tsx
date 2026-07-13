@@ -1,7 +1,7 @@
 import { Printer, Check } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
-import { money, fechaHora } from '@/utils/format'
+import { money, fechaHora, cantidad } from '@/utils/format'
 import { BRAND } from '@/config/brand'
 import type { ItemCarrito, Venta } from '@/types/database'
 
@@ -15,6 +15,11 @@ function precioItem(item: ItemCarrito): number {
   return item.modalidad === 'caja'
     ? (item.producto.precio_venta_caja ?? item.producto.precio_venta)
     : item.producto.precio_venta
+}
+
+function etiquetaCantidad(item: ItemCarrito): string {
+  if (item.producto.tipo_venta === 'granel') return `${cantidad(item.cantidad)} ${item.producto.unidad}`
+  return `${item.cantidad}x`
 }
 
 interface Props {
@@ -33,7 +38,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
         const precio = money(precioItem(i) * i.cantidad)
         return `
           <div class="item">
-            <div class="item-nombre">${i.cantidad}x ${i.producto.nombre}${etiq}</div>
+            <div class="item-nombre">${etiquetaCantidad(i)} ${i.producto.nombre}${etiq}</div>
             <div class="item-precio">${precio}</div>
           </div>`
       })
@@ -301,7 +306,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
           {items.map((i) => (
             <div key={`${i.producto.id}::${i.modalidad}`} className="flex justify-between gap-2">
               <span className="min-w-0 break-words font-semibold text-ink-800">
-                {i.cantidad}x {i.producto.nombre}
+                {etiquetaCantidad(i)} {i.producto.nombre}
                 {i.modalidad === 'caja' && (
                   <span className="ml-1 rounded bg-accent-100 px-1 py-0.5 text-[0.55rem] font-bold uppercase text-accent-700">
                     Caja

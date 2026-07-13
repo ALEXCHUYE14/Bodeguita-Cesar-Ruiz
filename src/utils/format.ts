@@ -10,6 +10,18 @@ export const money = (n: number | null | undefined): string => PEN.format(Number
 
 export const numero = new Intl.NumberFormat('es-PE')
 
+// Formatea una cantidad de stock/venta redondeando a 3 decimales y sin ceros
+// sobrantes (12.500 -> "12.5", 12 -> "12"). Util para productos a granel (kg).
+export function cantidad(n: number | null | undefined): string {
+  return (Math.round(Number(n ?? 0) * 1000) / 1000).toString()
+}
+
+// Etiqueta de unidad para mostrar junto a una cantidad de stock: el nombre de
+// la unidad de medida para productos a granel, o "u." para productos por pieza.
+export function etiquetaUnidad(producto: { tipo_venta: string; unidad: string }): string {
+  return producto.tipo_venta === 'granel' ? producto.unidad : 'u.'
+}
+
 export function fechaCorta(iso: string): string {
   return new Date(iso).toLocaleDateString('es-PE', {
     day: '2-digit',

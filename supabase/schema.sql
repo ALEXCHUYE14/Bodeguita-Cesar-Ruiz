@@ -109,11 +109,12 @@ create table if not exists public.productos (
   precio_compra       numeric(10,2) not null default 0 check (precio_compra >= 0),
   precio_venta        numeric(10,2) not null default 0 check (precio_venta >= 0),
   precio_venta_caja   numeric(10,2),
-  stock_actual        integer not null default 0,
-  stock_minimo        integer not null default 5 check (stock_minimo >= 0),
+  stock_actual        double precision not null default 0,
+  stock_minimo        double precision not null default 5 check (stock_minimo >= 0),
   unidad              text not null default 'unidad',
   tiene_caja          boolean not null default false,
   unidades_por_caja   integer,
+  tipo_venta          text not null default 'unidad',
   image_url           text,
   fecha_vencimiento   date,
   activo              boolean not null default true,
@@ -121,12 +122,33 @@ create table if not exists public.productos (
   actualizado_en      timestamptz not null default now()
 );
 
+-- Migracion en caliente: si el proyecto ya tenia esta tabla creada con los
+-- tipos anteriores (integer / sin tipo_venta), estos ALTER la ponen al dia sin
+-- perder datos. Son inofensivos si ya se corrieron antes o en un proyecto nuevo.
+alter table public.productos alter column stock_actual type double precision using stock_actual::double precision;
+alter table public.productos alter column stock_minimo type double precision using stock_minimo::double precision;
+alter table public.productos add column if not exists tipo_venta text not null default 'unidad';
+
+do $$ begin
+  alter table public.productos add constraint productos_tipo_venta_check
+    check (tipo_venta in ('unidad', 'granel'));
+exception when duplicate_object then null; end $$;
+
+-- Un producto a granel (se vende por peso/volumen fraccionado) no tiene sentido
+-- venderlo ademas por caja: son dos formas de fraccionar el mismo stock.
+do $$ begin
+  alter table public.productos add constraint productos_granel_sin_caja
+    check (tipo_venta <> 'granel' or tiene_caja = false);
+exception when duplicate_object then null; end $$;
+
 create index if not exists idx_productos_sku       on public.productos (sku);
 create index if not exists idx_productos_categoria on public.productos (categoria_id);
 create index if not exists idx_productos_stock_bajo on public.productos (stock_actual)
   where activo = true;
 
 comment on column public.productos.sku is 'Codigo unico escaneable (QR o barras).';
+comment on column public.productos.tipo_venta is
+  'unidad = se vende en piezas enteras (opcionalmente tambien por caja). granel = se vende fraccionado por peso/volumen (ej. kg de un saco de arroz).';
 
 -- Mantiene actualizado_en
 create or replace function public.touch_actualizado_en()
@@ -214,10 +236,26 @@ create table if not exists public.detalle_ventas (
   producto_id      uuid references public.productos(id) on delete set null,
   producto_nombre  text not null,
   sku              text,
-  cantidad         integer not null check (cantidad > 0),
+  cantidad         double precision not null check (cantidad > 0),
+  modalidad        text not null default 'unidad',
+  unidades         double precision not null default 0,
   precio_unitario  numeric(10,2) not null,
   subtotal         numeric(10,2) not null
 );
+
+-- Migracion en caliente (ver nota en la tabla productos).
+alter table public.detalle_ventas alter column cantidad type double precision using cantidad::double precision;
+alter table public.detalle_ventas add column if not exists modalidad text not null default 'unidad';
+alter table public.detalle_ventas add column if not exists unidades double precision not null default 0;
+-- Backfill unico: filas creadas antes de esta migracion no tienen "unidades"
+-- (queda en 0 por el default). Para esas, "cantidad" es el mejor estimado
+-- disponible (coincide siempre que la venta no haya sido por caja).
+update public.detalle_ventas set unidades = cantidad where unidades = 0;
+
+comment on column public.detalle_ventas.cantidad is
+  'Cantidad tal como se vendio: N cajas, N kg o N unidades, segun modalidad.';
+comment on column public.detalle_ventas.unidades is
+  'Unidades reales de stock descontadas (cantidad * unidades_por_caja si modalidad=caja). Se usa para anular ventas correctamente.';
 
 create index if not exists idx_detalle_venta    on public.detalle_ventas (venta_id);
 create index if not exists idx_detalle_producto on public.detalle_ventas (producto_id);
@@ -230,13 +268,18 @@ create table if not exists public.movimientos_inventario (
   producto_id     uuid references public.productos(id) on delete set null,
   producto_nombre text,
   tipo            tipo_movimiento not null,
-  cantidad        integer not null,
-  stock_previo    integer not null,
-  stock_nuevo     integer not null,
+  cantidad        double precision not null,
+  stock_previo    double precision not null,
+  stock_nuevo     double precision not null,
   motivo          text,
   usuario_id      uuid references public.perfiles(id) on delete set null,
   creado_en       timestamptz not null default now()
 );
+
+-- Migracion en caliente (ver nota en la tabla productos).
+alter table public.movimientos_inventario alter column cantidad     type double precision using cantidad::double precision;
+alter table public.movimientos_inventario alter column stock_previo type double precision using stock_previo::double precision;
+alter table public.movimientos_inventario alter column stock_nuevo  type double precision using stock_nuevo::double precision;
 
 create index if not exists idx_mov_producto on public.movimientos_inventario (producto_id, creado_en desc);
 
@@ -293,10 +336,13 @@ create table if not exists public.detalle_compras (
   compra_id        uuid not null references public.compras(id) on delete cascade,
   producto_id      uuid references public.productos(id) on delete set null,
   producto_nombre  text not null,
-  cantidad         integer not null check (cantidad > 0),
+  cantidad         double precision not null check (cantidad > 0),
   precio_unitario  numeric(10,2) not null,
   subtotal         numeric(10,2) not null
 );
+
+-- Migracion en caliente (ver nota en la tabla productos).
+alter table public.detalle_compras alter column cantidad type double precision using cantidad::double precision;
 
 create index if not exists idx_det_compras on public.detalle_compras (compra_id);
 
@@ -307,7 +353,7 @@ create table if not exists public.mermas (
   id               uuid primary key default gen_random_uuid(),
   producto_id      uuid references public.productos(id) on delete set null,
   producto_nombre  text not null,
-  cantidad         integer not null check (cantidad > 0),
+  cantidad         double precision not null check (cantidad > 0),
   costo_unitario   numeric(10,2) not null default 0,
   costo_total      numeric(10,2) not null default 0,
   motivo           motivo_merma not null,
@@ -315,6 +361,9 @@ create table if not exists public.mermas (
   usuario_id       uuid references public.perfiles(id) on delete set null,
   creado_en        timestamptz not null default now()
 );
+
+-- Migracion en caliente (ver nota en la tabla productos).
+alter table public.mermas alter column cantidad type double precision using cantidad::double precision;
 
 create index if not exists idx_mermas_fecha on public.mermas (creado_en desc);
 
@@ -352,7 +401,7 @@ create policy product_images_delete on storage.objects for delete
 -- RPC 1: REGISTRAR VENTA (transaccional: stock + kardex + caja)
 -- ----------------------------------------------------------------------------
 create or replace function public.registrar_venta(
-  p_items         jsonb,         -- [{ producto_id, cantidad, precio_unitario }]
+  p_items         jsonb,         -- [{ producto_id, cantidad, precio_unitario, modalidad }]
   p_metodo        metodo_pago,
   p_descuento     numeric  default 0,
   p_pago_recibido numeric  default 0,
@@ -367,7 +416,13 @@ as $$
 declare
   v_item        jsonb;
   v_producto    public.productos%rowtype;
-  v_cantidad    integer;
+  -- numeric (no double precision): se usan en round(x, 2) para los montos,
+  -- y Postgres no tiene una funcion round(double precision, integer).
+  -- Al insertar/comparar contra columnas double precision, Postgres castea
+  -- implicitamente sin problema.
+  v_cantidad    numeric;
+  v_modalidad   text;
+  v_unidades    numeric;
   v_precio      numeric(10,2);
   v_sub         numeric(10,2);
   v_subtotal    numeric(10,2) := 0;
@@ -389,6 +444,10 @@ begin
   end if;
 
   -- 1) Validar stock y acumular subtotal (bloqueo de filas para evitar carreras)
+  --    "unidades" es siempre lo que realmente se descuenta del stock (calculado
+  --    aqui, en servidor, en vez de confiar en lo que mande el frontend):
+  --    - modalidad 'caja'   -> cantidad * unidades_por_caja del producto
+  --    - modalidad 'unidad' o 'granel' -> cantidad tal cual (puede ser fraccion, ej. 0.5 kg)
   for v_item in select * from jsonb_array_elements(p_items)
   loop
     select * into v_producto from public.productos
@@ -398,12 +457,21 @@ begin
       raise exception 'Producto % no existe.', v_item->>'producto_id';
     end if;
 
-    v_cantidad := (v_item->>'cantidad')::integer;
+    v_cantidad  := (v_item->>'cantidad')::numeric;
+    v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
+
+    if v_cantidad is null or v_cantidad <= 0 then
+      raise exception 'Cantidad invalida para "%".', v_producto.nombre;
+    end if;
+
+    v_unidades := case when v_modalidad = 'caja'
+                    then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
+                    else v_cantidad end;
     v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
 
-    if v_producto.stock_actual < v_cantidad then
-      raise exception 'Stock insuficiente para "%": disponible %, solicitado %',
-        v_producto.nombre, v_producto.stock_actual, v_cantidad;
+    if v_producto.stock_actual < v_unidades then
+      raise exception 'Stock insuficiente para "%": disponible % %, solicitado %',
+        v_producto.nombre, v_producto.stock_actual, v_producto.unidad, v_unidades;
     end if;
 
     v_subtotal := v_subtotal + (v_precio * v_cantidad);
@@ -430,27 +498,31 @@ begin
   loop
     select * into v_producto from public.productos
       where id = (v_item->>'producto_id')::uuid;
-    v_cantidad := (v_item->>'cantidad')::integer;
-    v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
-    v_sub      := round(v_precio * v_cantidad, 2);
+    v_cantidad  := (v_item->>'cantidad')::numeric;
+    v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
+    v_unidades  := case when v_modalidad = 'caja'
+                     then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
+                     else v_cantidad end;
+    v_precio    := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
+    v_sub       := round(v_precio * v_cantidad, 2);
 
     insert into public.detalle_ventas (
-      venta_id, producto_id, producto_nombre, sku, cantidad, precio_unitario, subtotal
+      venta_id, producto_id, producto_nombre, sku, cantidad, modalidad, unidades, precio_unitario, subtotal
     ) values (
       v_venta.id, v_producto.id, v_producto.nombre, v_producto.sku,
-      v_cantidad, v_precio, v_sub
+      v_cantidad, v_modalidad, v_unidades, v_precio, v_sub
     );
 
     update public.productos
-      set stock_actual = stock_actual - v_cantidad
+      set stock_actual = stock_actual - v_unidades
       where id = v_producto.id;
 
     insert into public.movimientos_inventario (
       producto_id, producto_nombre, tipo, cantidad,
       stock_previo, stock_nuevo, motivo, usuario_id
     ) values (
-      v_producto.id, v_producto.nombre, 'venta', -v_cantidad,
-      v_producto.stock_actual, v_producto.stock_actual - v_cantidad,
+      v_producto.id, v_producto.nombre, 'venta', -v_unidades,
+      v_producto.stock_actual, v_producto.stock_actual - v_unidades,
       'Venta #' || v_venta.numero, auth.uid()
     );
   end loop;
@@ -462,9 +534,14 @@ $$;
 -- ----------------------------------------------------------------------------
 -- RPC 2: AJUSTE MANUAL DE STOCK (entradas / salidas / ajustes / devoluciones)
 -- ----------------------------------------------------------------------------
+-- El parametro p_cantidad cambio de integer a numeric (para soportar ajustes
+-- fraccionados en productos a granel), por lo que hay que tumbar la firma vieja:
+-- "create or replace" no permite cambiar el tipo de un parametro existente.
+drop function if exists public.ajustar_stock(uuid, integer, tipo_movimiento, text);
+
 create or replace function public.ajustar_stock(
   p_producto_id uuid,
-  p_cantidad    integer,
+  p_cantidad    numeric,
   p_tipo        tipo_movimiento,
   p_motivo      text default null
 )
@@ -474,7 +551,7 @@ security definer set search_path = public
 as $$
 declare
   v_prod  public.productos%rowtype;
-  v_nuevo integer;
+  v_nuevo double precision;
 begin
   select * into v_prod from public.productos where id = p_producto_id for update;
   if not found then raise exception 'Producto no encontrado.'; end if;
@@ -528,8 +605,10 @@ begin
       select * into v_prod from public.productos
         where id = v_det.producto_id for update;
       if found then
+        -- Se repone "unidades" (stock real descontado), no "cantidad" (que
+        -- para ventas por caja es el numero de cajas, no de unidades).
         update public.productos
-          set stock_actual = stock_actual + v_det.cantidad
+          set stock_actual = stock_actual + v_det.unidades
           where id = v_det.producto_id
           returning * into v_prod;
 
@@ -537,8 +616,8 @@ begin
           producto_id, producto_nombre, tipo, cantidad,
           stock_previo, stock_nuevo, motivo, usuario_id
         ) values (
-          v_prod.id, v_prod.nombre, 'devolucion', v_det.cantidad,
-          v_prod.stock_actual - v_det.cantidad, v_prod.stock_actual,
+          v_prod.id, v_prod.nombre, 'devolucion', v_det.unidades,
+          v_prod.stock_actual - v_det.unidades, v_prod.stock_actual,
           'Anulacion venta #' || v_venta.numero, auth.uid()
         );
       end if;

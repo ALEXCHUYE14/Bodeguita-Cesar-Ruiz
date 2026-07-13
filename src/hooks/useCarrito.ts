@@ -21,14 +21,6 @@ function maxCantidad(producto: Producto, modalidad: ModalidadVenta): number {
   return producto.stock_actual
 }
 
-/** Unidades reales de stock a descontar para un item del carrito */
-export function unidadesReales(item: ItemCarrito): number {
-  if (item.modalidad === 'caja') {
-    return item.cantidad * (item.producto.unidades_por_caja ?? 1)
-  }
-  return item.cantidad
-}
-
 export function useCarrito() {
   const [items, setItems] = useState<ItemCarrito[]>([])
   const [descuento, setDescuento] = useState(0)

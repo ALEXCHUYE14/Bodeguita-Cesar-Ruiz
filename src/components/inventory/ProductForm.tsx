@@ -8,7 +8,9 @@ import { useProductoImagen } from '@/hooks/useProductoImagen'
 import { supabase } from '@/lib/supabase'
 import { cx } from '@/utils/format'
 import { beepExito } from '@/utils/beep'
-import type { Categoria, Producto } from '@/types/database'
+import type { Categoria, Producto, TipoVenta } from '@/types/database'
+
+const UNIDADES_GRANEL = ['kg', 'g', 'litro', 'ml']
 
 interface Props {
   open: boolean
@@ -48,9 +50,12 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
   const [guardando, setGuardando] = useState(false)
   const [scannerSku, setScannerSku] = useState(false)
   const [tieneCaja, setTieneCaja] = useState(false)
+  const [tipoVenta, setTipoVenta] = useState<TipoVenta>('unidad')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [arrastrando, setArrastrando] = useState(false)
+
+  const esGranel = tipoVenta === 'granel'
 
   useEffect(() => {
     if (producto) {
@@ -68,9 +73,11 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
         precio_venta_caja: String(producto.precio_venta_caja ?? ''),
       })
       setTieneCaja(producto.tiene_caja)
+      setTipoVenta(producto.tipo_venta ?? 'unidad')
     } else {
       setF(vacio)
       setTieneCaja(false)
+      setTipoVenta('unidad')
     }
     setImageFile(null)
     setImagePreview(null)
@@ -79,6 +86,18 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
 
   function set<K extends keyof typeof vacio>(k: K, v: string) {
     setF((prev) => ({ ...prev, [k]: v }))
+  }
+
+  function elegirTipoVenta(t: TipoVenta) {
+    setTipoVenta(t)
+    if (t === 'granel') {
+      // Un producto a granel no se vende ademas por caja: son dos formas
+      // distintas de fraccionar el mismo stock.
+      setTieneCaja(false)
+      if (!UNIDADES_GRANEL.includes(f.unidad)) set('unidad', 'kg')
+    } else if (UNIDADES_GRANEL.includes(f.unidad)) {
+      set('unidad', 'unidad')
+    }
   }
 
   function onSkuDetectado(codigo: string) {
@@ -123,11 +142,14 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       categoria_id: f.categoria_id || null,
       precio_compra: parseFloat(f.precio_compra) || 0,
       precio_venta: parseFloat(f.precio_venta) || 0,
-      stock_minimo: parseInt(f.stock_minimo) || 0,
+      // stock_minimo/stock_actual usan parseFloat (no parseInt) para admitir
+      // decimales en productos a granel, ej. 0.5 kg.
+      stock_minimo: parseFloat(f.stock_minimo) || 0,
       unidad: f.unidad,
-      tiene_caja: tieneCaja,
-      unidades_por_caja: tieneCaja ? (parseInt(f.unidades_por_caja) || null) : null,
-      precio_venta_caja: tieneCaja ? (parseFloat(f.precio_venta_caja) || null) : null,
+      tipo_venta: tipoVenta,
+      tiene_caja: esGranel ? false : tieneCaja,
+      unidades_por_caja: !esGranel && tieneCaja ? (parseInt(f.unidades_por_caja) || null) : null,
+      precio_venta_caja: !esGranel && tieneCaja ? (parseFloat(f.precio_venta_caja) || null) : null,
     }
 
     // Guarda primero los datos del producto. La foto se sube después y por
@@ -142,7 +164,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       } else {
         const { data, error } = await supabase
           .from('productos')
-          .insert({ ...payload, stock_actual: parseInt(f.stock_actual) || 0 })
+          .insert({ ...payload, stock_actual: parseFloat(f.stock_actual) || 0 })
           .select('id')
           .single()
         if (error) throw error
@@ -265,7 +287,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
               value={f.unidad}
               onChange={(e) => set('unidad', e.target.value)}
             >
-              {['unidad', 'kg', 'litro', 'paquete', 'caja', 'docena'].map((u) => (
+              {(esGranel ? UNIDADES_GRANEL : ['unidad', 'paquete', 'caja', 'docena']).map((u) => (
                 <option key={u} value={u}>
                   {u}
                 </option>
@@ -273,7 +295,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
             </select>
           </Campo>
 
-          <Campo label="Precio compra (S/)">
+          <Campo label={esGranel ? `Precio compra por ${f.unidad} (S/)` : 'Precio compra (S/)'}>
             <input
               type="number"
               min={0}
@@ -285,7 +307,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
             />
           </Campo>
 
-          <Campo label="Precio venta (S/)">
+          <Campo label={esGranel ? `Precio venta por ${f.unidad} (S/)` : 'Precio venta (S/)'}>
             <input
               type="number"
               min={0}
@@ -298,10 +320,11 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
           </Campo>
 
           {!producto && (
-            <Campo label="Stock inicial">
+            <Campo label={esGranel ? `Stock inicial (en ${f.unidad})` : 'Stock inicial'}>
               <input
                 type="number"
                 min={0}
+                step={esGranel ? 0.001 : 1}
                 className="input tabular"
                 value={f.stock_actual}
                 onChange={(e) => set('stock_actual', e.target.value)}
@@ -311,12 +334,13 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
           )}
 
           <Campo
-            label="Stock mínimo (alerta)"
+            label={esGranel ? `Stock mínimo (en ${f.unidad})` : 'Stock mínimo (alerta)'}
             className={producto ? 'col-span-2' : ''}
           >
             <input
               type="number"
               min={0}
+              step={esGranel ? 0.001 : 1}
               className="input tabular"
               value={f.stock_minimo}
               onChange={(e) => set('stock_minimo', e.target.value)}
@@ -325,7 +349,51 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
           </Campo>
         </div>
 
-        {/* Venta por caja */}
+        {/* Tipo de venta: por unidad o a granel (peso fraccionado) */}
+        <div className="rounded-xl border border-ink-100 p-3">
+          <p className="mb-2 text-sm font-semibold text-ink-800">Tipo de venta</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => elegirTipoVenta('unidad')}
+              className={cx(
+                'rounded-lg border px-3 py-2 text-left text-xs font-semibold transition',
+                !esGranel
+                  ? 'border-accent-400 bg-accent-50 text-accent-700'
+                  : 'border-ink-200 text-ink-500 hover:border-ink-300',
+              )}
+            >
+              Por unidad
+              <span className="mt-0.5 block font-normal text-ink-400">
+                Piezas enteras, ej. gaseosas, galletas
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => elegirTipoVenta('granel')}
+              className={cx(
+                'rounded-lg border px-3 py-2 text-left text-xs font-semibold transition',
+                esGranel
+                  ? 'border-accent-400 bg-accent-50 text-accent-700'
+                  : 'border-ink-200 text-ink-500 hover:border-ink-300',
+              )}
+            >
+              A granel (peso)
+              <span className="mt-0.5 block font-normal text-ink-400">
+                Fraccionado, ej. kg de un saco de arroz
+              </span>
+            </button>
+          </div>
+          {esGranel && (
+            <p className="mt-2.5 rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
+              En el punto de venta se pedirá la cantidad exacta en <b>{f.unidad}</b> (admite
+              decimales, ej. 0.750).
+            </p>
+          )}
+        </div>
+
+        {/* Venta por caja (no aplica a productos a granel) */}
+        {!esGranel && (
         <div className="rounded-xl border border-ink-100 p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -379,6 +447,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
             </div>
           )}
         </div>
+        )}
 
         {/* Foto del producto */}
         <div>

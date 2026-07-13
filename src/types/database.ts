@@ -23,6 +23,7 @@ export type Categoria = {
 }
 
 export type ModalidadVenta = 'unidad' | 'caja'
+export type TipoVenta = 'unidad' | 'granel'
 
 export type Producto = {
   id: string
@@ -40,6 +41,7 @@ export type Producto = {
   fecha_vencimiento: string | null
   tiene_caja: boolean
   unidades_por_caja: number | null
+  tipo_venta: TipoVenta
   creado_en: string
   actualizado_en: string
   categorias?: Categoria | null
@@ -71,6 +73,8 @@ export type DetalleVenta = {
   producto_nombre: string
   sku: string | null
   cantidad: number
+  modalidad: ModalidadVenta
+  unidades: number
   precio_unitario: number
   subtotal: number
 }

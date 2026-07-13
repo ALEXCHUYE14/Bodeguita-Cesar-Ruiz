@@ -28,7 +28,8 @@ export function StockAdjust({ open, onClose, producto, onListo }: Props) {
     { id: 'salida' as const, label: 'Salida', icon: ArrowUpFromLine, signo: -1 },
     { id: 'ajuste' as const, label: 'Ajuste', icon: Settings2, signo: 1 },
   ]
-  const cantNum = parseInt(cantidad) || 0
+  // parseFloat (no parseInt) para admitir decimales en productos a granel (ej. 2.5 kg)
+  const cantNum = parseFloat(cantidad) || 0
   const signo = tipos.find((t) => t.id === tipo)!.signo
   const nuevoStock =
     tipo === 'ajuste' ? cantNum : producto.stock_actual + signo * cantNum
@@ -107,7 +108,8 @@ export function StockAdjust({ open, onClose, producto, onListo }: Props) {
           </span>
           <input
             type="number"
-            inputMode="numeric"
+            inputMode="decimal"
+            step={producto.tipo_venta === 'granel' ? 0.001 : 1}
             autoFocus
             className="input tabular text-lg"
             value={cantidad}
@@ -129,7 +131,9 @@ export function StockAdjust({ open, onClose, producto, onListo }: Props) {
         {cantNum > 0 && (
           <div className="flex items-center justify-between rounded-xl bg-ink-900 px-4 py-3 text-white">
             <span className="text-sm text-white/60">Stock resultante</span>
-            <span className="tabular font-display text-lg font-bold">{Math.max(nuevoStock, 0)}</span>
+            <span className="tabular font-display text-lg font-bold">
+              {Math.round(Math.max(nuevoStock, 0) * 1000) / 1000} {producto.unidad}
+            </span>
           </div>
         )}
       </div>

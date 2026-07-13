@@ -421,7 +421,8 @@ export function Compras() {
                     </span>
                     <input
                       type="number"
-                      min={1}
+                      min={0}
+                      step={0.001}
                       className="input tabular py-1 text-center text-sm"
                       value={item.cantidad}
                       onChange={(e) => actualizarItem(idx, 'cantidad', e.target.value)}

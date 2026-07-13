@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import {
   Search,
   ScanLine,
@@ -12,7 +12,7 @@ import {
   LockOpen,
 } from 'lucide-react'
 import { useProductos } from '@/hooks/useProductos'
-import { useCarrito, unidadesReales } from '@/hooks/useCarrito'
+import { useCarrito } from '@/hooks/useCarrito'
 import { useClientes } from '@/hooks/useClientes'
 import { useKeyboardScanner } from '@/hooks/useKeyboardScanner'
 import { useAuth } from '@/context/AuthContext'
@@ -24,7 +24,7 @@ import { useToast } from '@/components/ui/Toast'
 import { CameraScanner } from '@/components/pos/CameraScanner'
 import { PaymentModal } from '@/components/pos/PaymentModal'
 import { Receipt } from '@/components/pos/Receipt'
-import { money, cx } from '@/utils/format'
+import { money, cx, cantidad, etiquetaUnidad } from '@/utils/format'
 import { BRAND } from '@/config/brand'
 import { beepExito, beepError } from '@/utils/beep'
 import type { ItemCarrito, MetodoPago, ModalidadVenta, Producto, Venta } from '@/types/database'
@@ -49,6 +49,8 @@ export function POS() {
   const [abrirCajaOpen, setAbrirCajaOpen] = useState(false)
   const [montoInicial, setMontoInicial] = useState('')
   const [abriendoCaja, setAbriendoCaja] = useState(false)
+  const [granelSel, setGranelSel] = useState<Producto | null>(null)
+  const [cantGranel, setCantGranel] = useState('1')
 
   // Cajero sin caja abierta debe abrir una antes de vender
   const necesitaCaja = !esAdmin && !cajaCargando && !caja
@@ -76,6 +78,28 @@ export function POS() {
 
   // Lector fisico siempre activo (emulacion teclado) en desktop
   useKeyboardScanner(onScan)
+
+  // --- Productos a granel: piden la cantidad exacta (admite decimales) ---
+  function abrirGranel(p: Producto) {
+    setGranelSel(p)
+    setCantGranel('1')
+  }
+
+  function confirmarGranel() {
+    if (!granelSel) return
+    const c = parseFloat(cantGranel) || 0
+    if (c <= 0) {
+      toast.error('Ingresa una cantidad valida.')
+      return
+    }
+    if (c > granelSel.stock_actual) {
+      toast.error(`Stock insuficiente: disponible ${cantidad(granelSel.stock_actual)} ${granelSel.unidad}`)
+      return
+    }
+    carrito.agregar(granelSel, 'unidad', c)
+    toast.exito(`+ ${cantidad(c)} ${granelSel.unidad} de ${granelSel.nombre}`)
+    setGranelSel(null)
+  }
 
   const filtrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase()
@@ -111,7 +135,10 @@ export function POS() {
           i.modalidad === 'caja'
             ? (i.producto.precio_venta_caja ?? i.producto.precio_venta)
             : i.producto.precio_venta,
-        unidades_a_descontar: unidadesReales(i),
+        // El RPC calcula las unidades reales de stock a descontar en el
+        // servidor a partir de la modalidad + unidades_por_caja del producto
+        // (no confia en un total pre-calculado enviado por el cliente).
+        modalidad: i.modalidad,
       }))
       const { data, error } = await supabase.rpc('registrar_venta', {
         p_items: items,
@@ -290,6 +317,7 @@ export function POS() {
                 key={p.id}
                 producto={p}
                 onAgregar={(modalidad) => carrito.agregar(p, modalidad)}
+                onGranel={() => abrirGranel(p)}
               />
             ))}
           </div>
@@ -349,6 +377,62 @@ export function POS() {
         </p>
       </Sheet>
 
+      {/* Cantidad exacta para productos a granel (kg, litros, etc.) */}
+      <Sheet
+        open={!!granelSel}
+        onClose={() => setGranelSel(null)}
+        title={granelSel ? granelSel.nombre : 'Cantidad'}
+        maxWidth="max-w-sm"
+        footer={
+          <Button variant="secondary" size="lg" className="w-full" onClick={confirmarGranel}>
+            Agregar al carrito
+          </Button>
+        }
+      >
+        {granelSel && (
+          <div className="space-y-4">
+            <p className="text-sm text-ink-500">
+              Disponible: <b className="text-ink-800">{cantidad(granelSel.stock_actual)} {granelSel.unidad}</b>
+              {' · '}
+              {money(granelSel.precio_venta)} / {granelSel.unidad}
+            </p>
+            <label className="block">
+              <span className="label mb-1.5 block">Cantidad en {granelSel.unidad}</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step={0.001}
+                min={0}
+                autoFocus
+                className="input tabular text-xl"
+                value={cantGranel}
+                onChange={(e) => setCantGranel(e.target.value)}
+                placeholder="0.000"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[0.25, 0.5, 1, 2, 5].map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setCantGranel(String(v))}
+                  className="rounded-lg bg-ink-100 px-3 py-1.5 text-xs font-semibold text-ink-700 hover:bg-ink-200"
+                >
+                  {v} {granelSel.unidad}
+                </button>
+              ))}
+            </div>
+            {(parseFloat(cantGranel) || 0) > 0 && (
+              <div className="flex items-center justify-between rounded-xl bg-ink-900 px-4 py-3 text-white">
+                <span className="text-sm text-white/60">Subtotal</span>
+                <span className="tabular font-display text-lg font-bold">
+                  {money((parseFloat(cantGranel) || 0) * granelSel.precio_venta)}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </Sheet>
+
       <PaymentModal
         open={pagoAbierto}
         onClose={() => setPagoAbierto(false)}
@@ -397,15 +481,19 @@ function Chip({
 function ProductoCard({
   producto,
   onAgregar,
+  onGranel,
 }: {
   producto: Producto
   onAgregar: (modalidad: ModalidadVenta) => void
+  onGranel: () => void
 }) {
   const agotado = producto.stock_actual <= 0
   const bajo = producto.stock_actual > 0 && producto.stock_actual <= producto.stock_minimo
+  const esGranel = producto.tipo_venta === 'granel'
   const cajaDisp = producto.tiene_caja
     ? Math.floor(producto.stock_actual / (producto.unidades_por_caja ?? 1))
     : 0
+  const etiqStock = `${cantidad(producto.stock_actual)} ${etiquetaUnidad(producto)}`
 
   const imgSection = (
     <div className="relative aspect-square w-full overflow-hidden bg-ink-50">
@@ -429,7 +517,7 @@ function ProductoCard({
         {agotado ? (
           <Badge tone="danger">Agotado</Badge>
         ) : bajo ? (
-          <Badge tone="warning">{producto.stock_actual} u.</Badge>
+          <Badge tone="warning">{etiqStock}</Badge>
         ) : null}
       </div>
     </div>
@@ -443,15 +531,31 @@ function ProductoCard({
       <div className="mt-1 flex items-center justify-between gap-1">
         <p className="tabular font-display text-base font-bold text-ink-900">
           {money(producto.precio_venta)}
+          {esGranel && <span className="text-xs font-medium text-ink-400">/{producto.unidad}</span>}
         </p>
         {!agotado && !bajo && (
-          <span className="text-[0.65rem] font-medium text-ink-300">
-            {producto.stock_actual} u.
-          </span>
+          <span className="text-[0.65rem] font-medium text-ink-300">{etiqStock}</span>
         )}
       </div>
     </div>
   )
+
+  if (esGranel) {
+    return (
+      <button
+        onClick={onGranel}
+        disabled={agotado}
+        className={cx(
+          'group flex flex-col overflow-hidden rounded-xl border border-ink-100 bg-white text-left transition focusable',
+          'hover:border-ink-300 hover:shadow-card active:scale-[0.98]',
+          agotado && 'cursor-not-allowed opacity-50',
+        )}
+      >
+        {imgSection}
+        {infoSection}
+      </button>
+    )
+  }
 
   if (producto.tiene_caja) {
     return (
@@ -562,6 +666,7 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
         const precio = precioItem(i)
         const max = maxDisp(i)
         const esCaja = i.modalidad === 'caja'
+        const esGranel = i.producto.tipo_venta === 'granel'
         return (
           <li
             key={`${i.producto.id}::${i.modalidad}`}
@@ -575,25 +680,29 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
                     Caja
                   </span>
                 )}
-                {money(precio)} c/{esCaja ? 'caja' : 'u'}
+                {money(precio)} c/{esCaja ? 'caja' : esGranel ? i.producto.unidad : 'u'}
               </p>
             </div>
-            <div className="flex items-center gap-1 rounded-lg bg-ink-100 p-0.5">
-              <button
-                onClick={() => carrito.cambiarCantidad(i.producto.id, i.modalidad, i.cantidad - 1)}
-                className="grid size-7 place-items-center rounded-md text-ink-600 hover:bg-white"
-              >
-                <Minus className="size-3.5" />
-              </button>
-              <span className="tabular w-6 text-center text-sm font-bold">{i.cantidad}</span>
-              <button
-                onClick={() => carrito.cambiarCantidad(i.producto.id, i.modalidad, i.cantidad + 1)}
-                disabled={i.cantidad >= max}
-                className="grid size-7 place-items-center rounded-md text-ink-600 hover:bg-white disabled:opacity-30"
-              >
-                <Plus className="size-3.5" />
-              </button>
-            </div>
+            {esGranel ? (
+              <CantidadGranelInput item={i} cambiarCantidad={carrito.cambiarCantidad} />
+            ) : (
+              <div className="flex items-center gap-1 rounded-lg bg-ink-100 p-0.5">
+                <button
+                  onClick={() => carrito.cambiarCantidad(i.producto.id, i.modalidad, i.cantidad - 1)}
+                  className="grid size-7 place-items-center rounded-md text-ink-600 hover:bg-white"
+                >
+                  <Minus className="size-3.5" />
+                </button>
+                <span className="tabular w-6 text-center text-sm font-bold">{i.cantidad}</span>
+                <button
+                  onClick={() => carrito.cambiarCantidad(i.producto.id, i.modalidad, i.cantidad + 1)}
+                  disabled={i.cantidad >= max}
+                  className="grid size-7 place-items-center rounded-md text-ink-600 hover:bg-white disabled:opacity-30"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              </div>
+            )}
             <p className="tabular w-16 shrink-0 text-right text-sm font-bold text-ink-900">
               {money(precio * i.cantidad)}
             </p>
@@ -607,6 +716,43 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
         )
       })}
     </ul>
+  )
+}
+
+// Input de cantidad para productos a granel: mantiene su propio texto mientras
+// se escribe (para no borrar el item del carrito al pasar por "0" al tipear,
+// ej. "0.75") y solo confirma la cantidad final al perder el foco / Enter.
+function CantidadGranelInput({
+  item,
+  cambiarCantidad,
+}: {
+  item: ItemCarrito
+  cambiarCantidad: CarritoCtx['cambiarCantidad']
+}) {
+  const [valor, setValor] = useState(String(item.cantidad))
+
+  useEffect(() => {
+    setValor(String(item.cantidad))
+  }, [item.cantidad])
+
+  function confirmar() {
+    cambiarCantidad(item.producto.id, item.modalidad, parseFloat(valor) || 0)
+  }
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      step={0.001}
+      min={0}
+      value={valor}
+      onChange={(e) => setValor(e.target.value)}
+      onBlur={confirmar}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+      }}
+      className="input tabular w-20 py-1 text-center text-sm"
+    />
   )
 }
 

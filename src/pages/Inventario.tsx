@@ -17,7 +17,7 @@ import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { ProductForm } from '@/components/inventory/ProductForm'
 import { StockAdjust } from '@/components/inventory/StockAdjust'
-import { money, cx, fechaHora } from '@/utils/format'
+import { money, cx, fechaHora, cantidad, etiquetaUnidad } from '@/utils/format'
 import type { MovimientoInventario, Producto } from '@/types/database'
 
 export function Inventario() {
@@ -181,10 +181,10 @@ export function Inventario() {
                     {agotado ? (
                       <Badge tone="danger">Agotado</Badge>
                     ) : bajo ? (
-                      <Badge tone="warning">{p.stock_actual} u.</Badge>
+                      <Badge tone="warning">{cantidad(p.stock_actual)} {etiquetaUnidad(p)}</Badge>
                     ) : (
                       <span className="tabular text-sm font-semibold text-ink-700">
-                        {p.stock_actual} u.
+                        {cantidad(p.stock_actual)} {etiquetaUnidad(p)}
                       </span>
                     )}
                   </div>

@@ -79,7 +79,9 @@ export function Mermas() {
       toast.error('Selecciona o escribe el nombre del producto.')
       return
     }
-    const cantidad = parseInt(f.cantidad) || 0
+    // parseFloat (no parseInt) para admitir mermas fraccionadas en productos a
+    // granel (ej. 0.5 kg de azucar derramada).
+    const cantidad = parseFloat(f.cantidad) || 0
     if (cantidad <= 0) {
       toast.error('La cantidad debe ser mayor a 0.')
       return
@@ -305,7 +307,8 @@ export function Mermas() {
             <Campo label="Cantidad">
               <input
                 type="number"
-                min={1}
+                min={0}
+                step={0.001}
                 className="input tabular"
                 value={f.cantidad}
                 onChange={(e) => setF((p) => ({ ...p, cantidad: e.target.value }))}
