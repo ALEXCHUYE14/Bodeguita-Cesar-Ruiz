@@ -113,10 +113,11 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       toast.error('Solo se aceptan archivos de imagen.')
       return
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('La imagen no puede superar 5 MB.')
-      return
-    }
+    // Sin limite de peso: cualquier foto (incluso 10-15 MB de una camara de
+    // celular moderna) se comprime automaticamente a ~80-150KB en subir()
+    // (ver useProductoImagen.ts) antes de subirla. Bloquear aqui por tamano
+    // del archivo original rechazaba justo las fotos de camara que esa
+    // compresion existe para manejar.
     setImageFile(file)
     const prev = imagePreview
     if (prev) URL.revokeObjectURL(prev)
@@ -511,7 +512,9 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
               <p className="text-sm font-medium text-ink-600">
                 {arrastrando ? 'Suelta para subir' : 'Arrastra una foto aquí'}
               </p>
-              <p className="mt-0.5 text-xs text-ink-400">JPG, PNG o WEBP · máx. 5 MB</p>
+              <p className="mt-0.5 text-xs text-ink-400">
+                JPG, PNG o WEBP · cualquier peso, se optimiza automáticamente
+              </p>
               <div className="mt-3 flex gap-2">
                 <label className="cursor-pointer rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-sm hover:bg-ink-50">
                   <input
