@@ -11,12 +11,18 @@ function precioItem(item: ItemCarrito): number {
   if (item.modalidad === 'caja') {
     return item.producto.precio_venta_caja ?? item.producto.precio_venta
   }
+  if (item.modalidad === 'saco') {
+    return item.producto.precio_venta_saco ?? item.producto.precio_venta
+  }
   return item.producto.precio_venta
 }
 
 function maxCantidad(producto: Producto, modalidad: ModalidadVenta): number {
   if (modalidad === 'caja') {
     return Math.floor(producto.stock_actual / (producto.unidades_por_caja ?? 1))
+  }
+  if (modalidad === 'saco') {
+    return Math.floor(producto.stock_actual / (producto.kg_por_saco ?? 1))
   }
   return producto.stock_actual
 }

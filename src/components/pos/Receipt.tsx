@@ -12,13 +12,17 @@ const ETIQUETA: Record<string, string> = {
 }
 
 function precioItem(item: ItemCarrito): number {
-  return item.modalidad === 'caja'
-    ? (item.producto.precio_venta_caja ?? item.producto.precio_venta)
-    : item.producto.precio_venta
+  if (item.modalidad === 'caja') return item.producto.precio_venta_caja ?? item.producto.precio_venta
+  if (item.modalidad === 'saco') return item.producto.precio_venta_saco ?? item.producto.precio_venta
+  return item.producto.precio_venta
 }
 
 function etiquetaCantidad(item: ItemCarrito): string {
-  if (item.producto.tipo_venta === 'granel') return `${cantidad(item.cantidad)} ${item.producto.unidad}`
+  // El formato "N kg" solo aplica cuando se vendio a granel suelto
+  // (modalidad 'unidad'); por caja o por saco es una cantidad entera.
+  if (item.producto.tipo_venta === 'granel' && item.modalidad === 'unidad') {
+    return `${cantidad(item.cantidad)} ${item.producto.unidad}`
+  }
   return `${item.cantidad}x`
 }
 
@@ -33,8 +37,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
   function imprimir() {
     const lineas = items
       .map((i) => {
-        const esCaja = i.modalidad === 'caja'
-        const etiq = esCaja ? ' [Caja]' : ''
+        const etiq = i.modalidad === 'caja' ? ' [Caja]' : i.modalidad === 'saco' ? ' [Saco]' : ''
         const precio = money(precioItem(i) * i.cantidad)
         return `
           <div class="item">
@@ -307,9 +310,9 @@ export function Receipt({ open, onClose, venta, items }: Props) {
             <div key={`${i.producto.id}::${i.modalidad}`} className="flex justify-between gap-2">
               <span className="min-w-0 break-words font-semibold text-ink-800">
                 {etiquetaCantidad(i)} {i.producto.nombre}
-                {i.modalidad === 'caja' && (
+                {(i.modalidad === 'caja' || i.modalidad === 'saco') && (
                   <span className="ml-1 rounded bg-accent-100 px-1 py-0.5 text-[0.55rem] font-bold uppercase text-accent-700">
-                    Caja
+                    {i.modalidad === 'caja' ? 'Caja' : 'Saco'}
                   </span>
                 )}
               </span>

@@ -40,6 +40,8 @@ const vacio = {
   image_url: '',
   unidades_por_caja: '',
   precio_venta_caja: '',
+  kg_por_saco: '',
+  precio_venta_saco: '',
 }
 
 export function ProductForm({ open, onClose, producto, categorias, onGuardado }: Props) {
@@ -50,6 +52,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
   const [guardando, setGuardando] = useState(false)
   const [scannerSku, setScannerSku] = useState(false)
   const [tieneCaja, setTieneCaja] = useState(false)
+  const [tieneSaco, setTieneSaco] = useState(false)
   const [tipoVenta, setTipoVenta] = useState<TipoVenta>('unidad')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -71,12 +74,16 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
         image_url: producto.image_url ?? '',
         unidades_por_caja: String(producto.unidades_por_caja ?? ''),
         precio_venta_caja: String(producto.precio_venta_caja ?? ''),
+        kg_por_saco: String(producto.kg_por_saco ?? ''),
+        precio_venta_saco: String(producto.precio_venta_saco ?? ''),
       })
       setTieneCaja(producto.tiene_caja)
+      setTieneSaco(producto.tiene_saco)
       setTipoVenta(producto.tipo_venta ?? 'unidad')
     } else {
       setF(vacio)
       setTieneCaja(false)
+      setTieneSaco(false)
       setTipoVenta('unidad')
     }
     setImageFile(null)
@@ -95,8 +102,10 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       // distintas de fraccionar el mismo stock.
       setTieneCaja(false)
       if (!UNIDADES_GRANEL.includes(f.unidad)) set('unidad', 'kg')
-    } else if (UNIDADES_GRANEL.includes(f.unidad)) {
-      set('unidad', 'unidad')
+    } else {
+      // "Venta por saco" solo aplica a granel.
+      setTieneSaco(false)
+      if (UNIDADES_GRANEL.includes(f.unidad)) set('unidad', 'unidad')
     }
   }
 
@@ -151,6 +160,9 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       tiene_caja: esGranel ? false : tieneCaja,
       unidades_por_caja: !esGranel && tieneCaja ? (parseInt(f.unidades_por_caja) || null) : null,
       precio_venta_caja: !esGranel && tieneCaja ? (parseFloat(f.precio_venta_caja) || null) : null,
+      tiene_saco: esGranel && tieneSaco,
+      kg_por_saco: esGranel && tieneSaco ? (parseFloat(f.kg_por_saco) || null) : null,
+      precio_venta_saco: esGranel && tieneSaco ? (parseFloat(f.precio_venta_saco) || null) : null,
     }
 
     // Guarda primero los datos del producto. La foto se sube después y por
@@ -442,6 +454,64 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
                   className="input tabular"
                   value={f.precio_venta_caja}
                   onChange={(e) => set('precio_venta_caja', e.target.value)}
+                  placeholder="0.00"
+                />
+              </Campo>
+            </div>
+          )}
+        </div>
+        )}
+
+        {/* Venta por saco (solo para productos a granel) */}
+        {esGranel && (
+        <div className="rounded-xl border border-ink-100 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-ink-800">Venta por saco</p>
+              <p className="text-xs text-ink-400">
+                Permite vender el saco/bolsa completo además de por {f.unidad} suelto
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={tieneSaco}
+              onClick={() => setTieneSaco((v) => !v)}
+              className={cx(
+                'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+                tieneSaco ? 'bg-accent-500' : 'bg-ink-200',
+              )}
+            >
+              <span
+                className={cx(
+                  'inline-block size-5 rounded-full bg-white shadow transition-transform',
+                  tieneSaco ? 'translate-x-5' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+          </div>
+
+          {tieneSaco && (
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Campo label={`${f.unidad} por saco`}>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.001}
+                  className="input tabular"
+                  value={f.kg_por_saco}
+                  onChange={(e) => set('kg_por_saco', e.target.value)}
+                  placeholder="50"
+                />
+              </Campo>
+              <Campo label="Precio saco (S/)">
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  className="input tabular"
+                  value={f.precio_venta_saco}
+                  onChange={(e) => set('precio_venta_saco', e.target.value)}
                   placeholder="0.00"
                 />
               </Campo>

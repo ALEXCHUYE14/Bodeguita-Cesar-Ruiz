@@ -22,7 +22,7 @@ export type Categoria = {
   creado_en: string
 }
 
-export type ModalidadVenta = 'unidad' | 'caja'
+export type ModalidadVenta = 'unidad' | 'caja' | 'saco'
 export type TipoVenta = 'unidad' | 'granel'
 
 export type Producto = {
@@ -42,6 +42,9 @@ export type Producto = {
   tiene_caja: boolean
   unidades_por_caja: number | null
   tipo_venta: TipoVenta
+  tiene_saco: boolean
+  kg_por_saco: number | null
+  precio_venta_saco: number | null
   creado_en: string
   actualizado_en: string
   categorias?: Categoria | null

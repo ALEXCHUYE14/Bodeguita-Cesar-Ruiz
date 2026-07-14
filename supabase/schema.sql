@@ -115,6 +115,9 @@ create table if not exists public.productos (
   tiene_caja          boolean not null default false,
   unidades_por_caja   integer,
   tipo_venta          text not null default 'unidad',
+  tiene_saco          boolean not null default false,
+  kg_por_saco         double precision,
+  precio_venta_saco   numeric(10,2),
   image_url           text,
   fecha_vencimiento   date,
   activo              boolean not null default true,
@@ -128,6 +131,9 @@ create table if not exists public.productos (
 alter table public.productos alter column stock_actual type double precision using stock_actual::double precision;
 alter table public.productos alter column stock_minimo type double precision using stock_minimo::double precision;
 alter table public.productos add column if not exists tipo_venta text not null default 'unidad';
+alter table public.productos add column if not exists tiene_saco boolean not null default false;
+alter table public.productos add column if not exists kg_por_saco double precision;
+alter table public.productos add column if not exists precio_venta_saco numeric(10,2);
 
 do $$ begin
   alter table public.productos add constraint productos_tipo_venta_check
@@ -139,6 +145,14 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.productos add constraint productos_granel_sin_caja
     check (tipo_venta <> 'granel' or tiene_caja = false);
+exception when duplicate_object then null; end $$;
+
+-- "Venta por saco" (bolsa/costal completo) es la contraparte de "venta por
+-- caja" pero para productos a granel: permite vender el saco entero (ej. 50kg
+-- de arroz) ademas de venderlo suelto por kg.
+do $$ begin
+  alter table public.productos add constraint productos_saco_solo_granel
+    check (tiene_saco = false or tipo_venta = 'granel');
 exception when duplicate_object then null; end $$;
 
 create index if not exists idx_productos_sku       on public.productos (sku);
@@ -446,8 +460,9 @@ begin
   -- 1) Validar stock y acumular subtotal (bloqueo de filas para evitar carreras)
   --    "unidades" es siempre lo que realmente se descuenta del stock (calculado
   --    aqui, en servidor, en vez de confiar en lo que mande el frontend):
-  --    - modalidad 'caja'   -> cantidad * unidades_por_caja del producto
-  --    - modalidad 'unidad' o 'granel' -> cantidad tal cual (puede ser fraccion, ej. 0.5 kg)
+  --    - modalidad 'caja'  -> cantidad * unidades_por_caja del producto
+  --    - modalidad 'saco'  -> cantidad * kg_por_saco del producto (granel)
+  --    - modalidad 'unidad' -> cantidad tal cual (puede ser fraccion, ej. 0.5 kg si es granel)
   for v_item in select * from jsonb_array_elements(p_items)
   loop
     select * into v_producto from public.productos
@@ -464,9 +479,11 @@ begin
       raise exception 'Cantidad invalida para "%".', v_producto.nombre;
     end if;
 
-    v_unidades := case when v_modalidad = 'caja'
-                    then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
-                    else v_cantidad end;
+    v_unidades := case v_modalidad
+                    when 'caja' then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
+                    when 'saco' then v_cantidad * coalesce(v_producto.kg_por_saco, 1)
+                    else v_cantidad
+                  end;
     v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
 
     if v_producto.stock_actual < v_unidades then
@@ -500,9 +517,11 @@ begin
       where id = (v_item->>'producto_id')::uuid;
     v_cantidad  := (v_item->>'cantidad')::numeric;
     v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
-    v_unidades  := case when v_modalidad = 'caja'
-                     then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
-                     else v_cantidad end;
+    v_unidades  := case v_modalidad
+                     when 'caja' then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
+                     when 'saco' then v_cantidad * coalesce(v_producto.kg_por_saco, 1)
+                     else v_cantidad
+                   end;
     v_precio    := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
     v_sub       := round(v_precio * v_cantidad, 2);
 

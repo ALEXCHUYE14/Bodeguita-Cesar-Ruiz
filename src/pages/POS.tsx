@@ -131,13 +131,10 @@ export function POS() {
       const items = carrito.items.map((i) => ({
         producto_id: i.producto.id,
         cantidad: i.cantidad,
-        precio_unitario:
-          i.modalidad === 'caja'
-            ? (i.producto.precio_venta_caja ?? i.producto.precio_venta)
-            : i.producto.precio_venta,
+        precio_unitario: precioItem(i),
         // El RPC calcula las unidades reales de stock a descontar en el
-        // servidor a partir de la modalidad + unidades_por_caja del producto
-        // (no confia en un total pre-calculado enviado por el cliente).
+        // servidor a partir de la modalidad + unidades_por_caja/kg_por_saco
+        // del producto (no confia en un total pre-calculado enviado por el cliente).
         modalidad: i.modalidad,
       }))
       const { data, error } = await supabase.rpc('registrar_venta', {
@@ -493,6 +490,9 @@ function ProductoCard({
   const cajaDisp = producto.tiene_caja
     ? Math.floor(producto.stock_actual / (producto.unidades_por_caja ?? 1))
     : 0
+  const sacoDisp = producto.tiene_saco
+    ? Math.floor(producto.stock_actual / (producto.kg_por_saco ?? 1))
+    : 0
   const etiqStock = `${cantidad(producto.stock_actual)} ${etiquetaUnidad(producto)}`
 
   const imgSection = (
@@ -539,6 +539,36 @@ function ProductoCard({
       </div>
     </div>
   )
+
+  if (esGranel && producto.tiene_saco) {
+    return (
+      <div
+        className={cx(
+          'group flex flex-col overflow-hidden rounded-xl border border-ink-100 bg-white text-left transition',
+          agotado && 'opacity-50',
+        )}
+      >
+        {imgSection}
+        {infoSection}
+        <div className="flex gap-1 border-t border-ink-100 p-1.5">
+          <button
+            onClick={onGranel}
+            disabled={agotado}
+            className="flex-1 rounded-lg bg-ink-100 py-1.5 text-xs font-semibold text-ink-700 transition hover:bg-ink-200 disabled:opacity-40"
+          >
+            {producto.unidad}
+          </button>
+          <button
+            onClick={() => onAgregar('saco')}
+            disabled={agotado || sacoDisp <= 0}
+            className="flex-1 rounded-lg bg-accent-100 py-1.5 text-xs font-semibold text-accent-700 transition hover:bg-accent-200 disabled:opacity-40"
+          >
+            Saco{sacoDisp > 0 ? ` (${sacoDisp})` : ''}
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (esGranel) {
     return (
@@ -639,15 +669,19 @@ function CartPanel({ carrito, onCobrar }: { carrito: CarritoCtx; onCobrar: () =>
 }
 
 function precioItem(item: ItemCarrito): number {
-  return item.modalidad === 'caja'
-    ? (item.producto.precio_venta_caja ?? item.producto.precio_venta)
-    : item.producto.precio_venta
+  if (item.modalidad === 'caja') return item.producto.precio_venta_caja ?? item.producto.precio_venta
+  if (item.modalidad === 'saco') return item.producto.precio_venta_saco ?? item.producto.precio_venta
+  return item.producto.precio_venta
 }
 
 function maxDisp(item: ItemCarrito): number {
-  return item.modalidad === 'caja'
-    ? Math.floor(item.producto.stock_actual / (item.producto.unidades_por_caja ?? 1))
-    : item.producto.stock_actual
+  if (item.modalidad === 'caja') {
+    return Math.floor(item.producto.stock_actual / (item.producto.unidades_por_caja ?? 1))
+  }
+  if (item.modalidad === 'saco') {
+    return Math.floor(item.producto.stock_actual / (item.producto.kg_por_saco ?? 1))
+  }
+  return item.producto.stock_actual
 }
 
 function CartItems({ carrito }: { carrito: CarritoCtx }) {
@@ -666,7 +700,10 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
         const precio = precioItem(i)
         const max = maxDisp(i)
         const esCaja = i.modalidad === 'caja'
-        const esGranel = i.producto.tipo_venta === 'granel'
+        const esSaco = i.modalidad === 'saco'
+        // Solo se pide cantidad fraccionada (kg) cuando es granel vendido
+        // "suelto" (modalidad 'unidad'); por saco es una cantidad entera.
+        const esKgFraccionado = i.producto.tipo_venta === 'granel' && i.modalidad === 'unidad'
         return (
           <li
             key={`${i.producto.id}::${i.modalidad}`}
@@ -675,15 +712,15 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-ink-800">{i.producto.nombre}</p>
               <p className="tabular text-xs text-ink-400">
-                {esCaja && (
+                {(esCaja || esSaco) && (
                   <span className="mr-1 rounded bg-accent-100 px-1 py-0.5 text-[0.6rem] font-bold uppercase text-accent-700">
-                    Caja
+                    {esCaja ? 'Caja' : 'Saco'}
                   </span>
                 )}
-                {money(precio)} c/{esCaja ? 'caja' : esGranel ? i.producto.unidad : 'u'}
+                {money(precio)} c/{esCaja ? 'caja' : esSaco ? 'saco' : esKgFraccionado ? i.producto.unidad : 'u'}
               </p>
             </div>
-            {esGranel ? (
+            {esKgFraccionado ? (
               <CantidadGranelInput item={i} cambiarCantidad={carrito.cambiarCantidad} />
             ) : (
               <div className="flex items-center gap-1 rounded-lg bg-ink-100 p-0.5">

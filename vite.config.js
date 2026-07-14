@@ -27,6 +27,9 @@ export default defineConfig({
             },
             workbox: {
                 globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+                // Borra las caches de versiones anteriores al activar el nuevo
+                // service worker, para que nunca sirva JS/CSS de un despliegue viejo.
+                cleanupOutdatedCaches: true,
                 runtimeCaching: [
                     {
                         urlPattern: function (_a) {
