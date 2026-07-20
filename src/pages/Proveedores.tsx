@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Plus, Pencil, Trash2, Truck, Phone, Mail, MapPin, Hash } from 'lucide-react'
 import { useProveedores } from '@/hooks/useProveedores'
+import { useAuth } from '@/context/AuthContext'
 import { Button, Card } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -11,6 +12,7 @@ const VACIO = { nombre: '', ruc: '', telefono: '', email: '', direccion: '' }
 
 export function Proveedores() {
   const { proveedores, cargando, crear, actualizar, eliminar } = useProveedores()
+  const { esAdmin } = useAuth()
   const toast = useToast()
   const [formOpen, setFormOpen] = useState(false)
   const [editando, setEditando] = useState<Proveedor | null>(null)
@@ -87,10 +89,12 @@ export function Proveedores() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Proveedores</h1>
           <p className="text-sm text-ink-400">{proveedores.length} proveedor(es) activos</p>
         </div>
-        <Button variant="primary" onClick={abrirNuevo}>
-          <Plus className="size-[18px]" />
-          <span className="hidden sm:inline">Nuevo proveedor</span>
-        </Button>
+        {esAdmin && (
+          <Button variant="primary" onClick={abrirNuevo}>
+            <Plus className="size-[18px]" />
+            <span className="hidden sm:inline">Nuevo proveedor</span>
+          </Button>
+        )}
       </div>
 
       <Card className="overflow-hidden">
@@ -106,7 +110,7 @@ export function Proveedores() {
         {cargando ? (
           <SkeletonList />
         ) : proveedores.length === 0 ? (
-          <EmptyState onNuevo={abrirNuevo} />
+          <EmptyState onNuevo={abrirNuevo} puedeCrear={esAdmin} />
         ) : (
           <ul className="divide-y divide-ink-100">
             {proveedores.map((p) => (
@@ -160,34 +164,38 @@ export function Proveedores() {
                 </span>
 
                 {/* Acciones desktop */}
-                <div className="hidden w-20 items-center justify-end gap-1 lg:flex">
-                  <IconBtn title="Editar" onClick={() => abrirEditar(p)}>
-                    <Pencil className="size-[16px]" />
-                  </IconBtn>
-                  <IconBtn
-                    title="Eliminar"
-                    onClick={() => setConfirmando(p.id)}
-                    danger
-                  >
-                    <Trash2 className="size-[16px]" />
-                  </IconBtn>
-                </div>
+                {esAdmin && (
+                  <div className="hidden w-20 items-center justify-end gap-1 lg:flex">
+                    <IconBtn title="Editar" onClick={() => abrirEditar(p)}>
+                      <Pencil className="size-[16px]" />
+                    </IconBtn>
+                    <IconBtn
+                      title="Eliminar"
+                      onClick={() => setConfirmando(p.id)}
+                      danger
+                    >
+                      <Trash2 className="size-[16px]" />
+                    </IconBtn>
+                  </div>
+                )}
 
                 {/* Acciones movil */}
-                <div className="flex gap-1.5 lg:hidden">
-                  <button
-                    onClick={() => abrirEditar(p)}
-                    className="flex items-center gap-1.5 rounded-lg bg-ink-100 px-3 py-1.5 text-xs font-semibold text-ink-600"
-                  >
-                    <Pencil className="size-3.5" /> Editar
-                  </button>
-                  <button
-                    onClick={() => setConfirmando(p.id)}
-                    className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
+                {esAdmin && (
+                  <div className="flex gap-1.5 lg:hidden">
+                    <button
+                      onClick={() => abrirEditar(p)}
+                      className="flex items-center gap-1.5 rounded-lg bg-ink-100 px-3 py-1.5 text-xs font-semibold text-ink-600"
+                    >
+                      <Pencil className="size-3.5" /> Editar
+                    </button>
+                    <button
+                      onClick={() => setConfirmando(p.id)}
+                      className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -341,7 +349,7 @@ function SkeletonList() {
   )
 }
 
-function EmptyState({ onNuevo }: { onNuevo: () => void }) {
+function EmptyState({ onNuevo, puedeCrear }: { onNuevo: () => void; puedeCrear: boolean }) {
   return (
     <div className="grid place-items-center py-16 text-center">
       <Truck className="mb-3 size-8 text-ink-300" />
@@ -349,9 +357,11 @@ function EmptyState({ onNuevo }: { onNuevo: () => void }) {
       <p className="mb-4 mt-1 text-xs text-ink-300">
         Registra tus distribuidoras para vincularlas a las compras
       </p>
-      <Button variant="outline" size="sm" onClick={onNuevo}>
-        <Plus className="size-4" /> Agregar proveedor
-      </Button>
+      {puedeCrear && (
+        <Button variant="outline" size="sm" onClick={onNuevo}>
+          <Plus className="size-4" /> Agregar proveedor
+        </Button>
+      )}
     </div>
   )
 }

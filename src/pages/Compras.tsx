@@ -11,6 +11,7 @@ import {
 import { useCompras, type ItemCompra } from '@/hooks/useCompras'
 import { useProveedores } from '@/hooks/useProveedores'
 import { useProductos } from '@/hooks/useProductos'
+import { useAuth } from '@/context/AuthContext'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -21,6 +22,7 @@ export function Compras() {
   const { compras, cargando, crear, cambiarEstado, obtenerDetalles } = useCompras()
   const { proveedores } = useProveedores()
   const { productos } = useProductos()
+  const { esAdmin } = useAuth()
   const toast = useToast()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -171,10 +173,12 @@ export function Compras() {
             </span>
           </p>
         </div>
-        <Button variant="primary" onClick={() => { resetForm(); setFormOpen(true) }}>
-          <Plus className="size-[18px]" />
-          <span className="hidden sm:inline">Nueva compra</span>
-        </Button>
+        {esAdmin && (
+          <Button variant="primary" onClick={() => { resetForm(); setFormOpen(true) }}>
+            <Plus className="size-[18px]" />
+            <span className="hidden sm:inline">Nueva compra</span>
+          </Button>
+        )}
       </div>
 
       {/* Filtros de estado */}
@@ -246,17 +250,19 @@ export function Compras() {
                   >
                     Ver
                   </button>
-                  <button
-                    onClick={() => toggleEstado(c)}
-                    className={cx(
-                      'rounded-lg px-2.5 py-1 text-xs font-semibold transition',
-                      c.estado === 'pendiente'
-                        ? 'bg-accent-50 text-accent-700 hover:bg-accent-100'
-                        : 'bg-ink-100 text-ink-500 hover:bg-ink-200',
-                    )}
-                  >
-                    {c.estado === 'pendiente' ? 'Pagar' : 'Reabrir'}
-                  </button>
+                  {esAdmin && (
+                    <button
+                      onClick={() => toggleEstado(c)}
+                      className={cx(
+                        'rounded-lg px-2.5 py-1 text-xs font-semibold transition',
+                        c.estado === 'pendiente'
+                          ? 'bg-accent-50 text-accent-700 hover:bg-accent-100'
+                          : 'bg-ink-100 text-ink-500 hover:bg-ink-200',
+                      )}
+                    >
+                      {c.estado === 'pendiente' ? 'Pagar' : 'Reabrir'}
+                    </button>
+                  )}
                 </div>
 
                 {/* Movil */}
@@ -270,12 +276,14 @@ export function Compras() {
                     >
                       Ver
                     </button>
-                    <button
-                      onClick={() => toggleEstado(c)}
-                      className="rounded-lg bg-accent-50 px-2.5 py-1 text-xs font-semibold text-accent-700"
-                    >
-                      {c.estado === 'pendiente' ? 'Pagar' : 'Reabrir'}
-                    </button>
+                    {esAdmin && (
+                      <button
+                        onClick={() => toggleEstado(c)}
+                        className="rounded-lg bg-accent-50 px-2.5 py-1 text-xs font-semibold text-accent-700"
+                      >
+                        {c.estado === 'pendiente' ? 'Pagar' : 'Reabrir'}
+                      </button>
+                    )}
                   </div>
                 </div>
               </li>

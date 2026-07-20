@@ -1,7 +1,134 @@
-import { useState } from 'react'
-import { Printer, CheckCircle2, AlertTriangle, Info } from 'lucide-react'
-import { Card, Button } from '@/components/ui/Button'
+import { useEffect, useState } from 'react'
+import { Printer, CheckCircle2, AlertTriangle, Info, Users, ShieldCheck } from 'lucide-react'
+import { Card, Button, Badge, Spinner } from '@/components/ui/Button'
+import { useToast } from '@/components/ui/Toast'
+import { useAuth } from '@/context/AuthContext'
+import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
+import { cx } from '@/utils/format'
+import type { Perfil, Rol } from '@/types/database'
+
+const ETIQUETA_ROL: Record<Rol, string> = {
+  administrador: 'Administrador',
+  supervisor: 'Supervisor',
+  cajero: 'Cajero',
+}
+
+function GestionUsuarios() {
+  const { perfil: perfilPropio } = useAuth()
+  const toast = useToast()
+  const [usuarios, setUsuarios] = useState<Perfil[]>([])
+  const [cargando, setCargando] = useState(true)
+  const [actualizandoId, setActualizandoId] = useState<string | null>(null)
+
+  async function cargar() {
+    setCargando(true)
+    const { data, error } = await supabase.from('perfiles').select('*').order('nombre')
+    if (error) toast.error('No se pudo cargar la lista de usuarios')
+    setUsuarios(data ?? [])
+    setCargando(false)
+  }
+
+  useEffect(() => {
+    cargar()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function cambiarRol(u: Perfil, rol: Rol) {
+    setActualizandoId(u.id)
+    try {
+      const { error } = await supabase.from('perfiles').update({ rol }).eq('id', u.id)
+      if (error) throw error
+      setUsuarios((prev) => prev.map((x) => (x.id === u.id ? { ...x, rol } : x)))
+      toast.exito(`${u.nombre} ahora es ${ETIQUETA_ROL[rol]}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo cambiar el rol')
+    } finally {
+      setActualizandoId(null)
+    }
+  }
+
+  async function alternarActivo(u: Perfil) {
+    setActualizandoId(u.id)
+    try {
+      const { error } = await supabase
+        .from('perfiles')
+        .update({ activo: !u.activo })
+        .eq('id', u.id)
+      if (error) throw error
+      setUsuarios((prev) => prev.map((x) => (x.id === u.id ? { ...x, activo: !u.activo } : x)))
+      toast.exito(u.activo ? `${u.nombre} desactivado` : `${u.nombre} reactivado`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo actualizar')
+    } finally {
+      setActualizandoId(null)
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-ink-100 px-5 py-4">
+        <h2 className="flex items-center gap-2 font-display font-bold text-ink-900">
+          <Users className="size-[18px]" /> Usuarios y roles
+        </h2>
+        <p className="mt-0.5 text-sm text-ink-400">
+          Administrador: acceso total. Supervisor: puede ver reportes (Rentabilidad, Compras,
+          Mermas, Clientes, Proveedores, Resumen) pero no crear, editar ni eliminar nada. Cajero:
+          solo Punto de venta, Inventario, Ventas y Caja.
+        </p>
+      </div>
+      {cargando ? (
+        <div className="grid place-items-center py-10">
+          <Spinner className="size-5 text-ink-400" />
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-100">
+          {usuarios.map((u) => {
+            const esUnoMismo = u.id === perfilPropio?.id
+            return (
+              <li key={u.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-ink-900">
+                    {u.nombre}
+                    {esUnoMismo && <ShieldCheck className="size-3.5 text-accent-500" />}
+                    {!u.activo && <Badge tone="danger">Inactivo</Badge>}
+                  </p>
+                  <p className="text-xs text-ink-400">{ETIQUETA_ROL[u.rol]}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    className="input py-1.5 text-xs disabled:opacity-40"
+                    value={u.rol}
+                    disabled={esUnoMismo || actualizandoId === u.id}
+                    title={esUnoMismo ? 'No puedes cambiar tu propio rol' : undefined}
+                    onChange={(e) => cambiarRol(u, e.target.value as Rol)}
+                  >
+                    <option value="cajero">Cajero</option>
+                    <option value="supervisor">Supervisor</option>
+                    <option value="administrador">Administrador</option>
+                  </select>
+                  <button
+                    disabled={esUnoMismo || actualizandoId === u.id}
+                    title={esUnoMismo ? 'No puedes desactivar tu propia cuenta' : undefined}
+                    onClick={() => alternarActivo(u)}
+                    className={cx(
+                      'rounded-lg px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-40',
+                      u.activo
+                        ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                        : 'bg-accent-50 text-accent-700 hover:bg-accent-100',
+                    )}
+                  >
+                    {u.activo ? 'Desactivar' : 'Reactivar'}
+                  </button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Card>
+  )
+}
 
 export function Configuracion() {
   const [estadoImpresion, setEstadoImpresion] = useState<'idle' | 'ok' | 'error'>('idle')
@@ -74,6 +201,9 @@ export function Configuracion() {
         <h1 className="font-display text-2xl font-bold text-ink-900">Configuración</h1>
         <p className="text-sm text-ink-400">Ajustes del sistema y herramientas de diagnóstico</p>
       </div>
+
+      {/* Sección: Usuarios y roles */}
+      <GestionUsuarios />
 
       {/* Sección: Impresora */}
       <Card className="overflow-hidden">

@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   PackageX,
   Trash2,
+  Download,
 } from 'lucide-react'
 import { useProductos } from '@/hooks/useProductos'
 import { useAuth } from '@/context/AuthContext'
@@ -17,7 +18,8 @@ import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { ProductForm } from '@/components/inventory/ProductForm'
 import { StockAdjust } from '@/components/inventory/StockAdjust'
-import { money, cx, fechaHora, cantidad, etiquetaUnidad } from '@/utils/format'
+import { money, cx, fechaHora, cantidad, etiquetaUnidad, ymd } from '@/utils/format'
+import { descargarCSV } from '@/utils/csv'
 import type { MovimientoInventario, Producto } from '@/types/database'
 
 export function Inventario() {
@@ -47,6 +49,36 @@ export function Inventario() {
     0,
   )
   const cantBajo = productos.filter((p) => p.stock_actual <= p.stock_minimo).length
+
+  function exportarCSV() {
+    const filas: (string | number)[][] = [
+      ['Reporte de inventario', ymd(new Date())],
+      [],
+      [
+        'SKU', 'Nombre', 'Categoria', 'Tipo de venta', 'Unidad',
+        'Precio compra', 'Precio venta', 'Stock actual', 'Stock minimo',
+        'Valorizado (compra x stock)', 'Vence',
+      ],
+      ...productos.map((p) => [
+        p.sku,
+        p.nombre,
+        p.categorias?.nombre ?? '',
+        p.tipo_venta === 'granel' ? 'Granel' : 'Unidad',
+        p.unidad,
+        p.precio_compra.toFixed(2),
+        p.precio_venta.toFixed(2),
+        cantidad(p.stock_actual),
+        cantidad(p.stock_minimo),
+        (p.precio_compra * p.stock_actual).toFixed(2),
+        p.fecha_vencimiento ?? '',
+      ]),
+      [],
+      ['Total productos', productos.length],
+      ['Valorizado total', totalValorizado.toFixed(2)],
+    ]
+    descargarCSV(`inventario_${ymd(new Date())}.csv`, filas)
+    toast.exito('Inventario descargado')
+  }
 
   function abrirNuevo() {
     setEditando(null)
@@ -84,11 +116,16 @@ export function Inventario() {
             {productos.length} productos · valorizado {money(totalValorizado)}
           </p>
         </div>
-        {esAdmin && (
-          <Button variant="primary" onClick={abrirNuevo}>
-            <Plus className="size-[18px]" /> <span className="hidden sm:inline">Nuevo producto</span>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={exportarCSV} disabled={productos.length === 0}>
+            <Download className="size-4" /> <span className="hidden sm:inline">Descargar</span>
           </Button>
-        )}
+          {esAdmin && (
+            <Button variant="primary" onClick={abrirNuevo}>
+              <Plus className="size-[18px]" /> <span className="hidden sm:inline">Nuevo producto</span>
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Controles */}

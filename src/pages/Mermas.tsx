@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Search, AlertTriangle, TrendingDown } from 'lucide-react'
 import { useMermas, ETIQUETA_MOTIVO } from '@/hooks/useMermas'
 import { useProductos } from '@/hooks/useProductos'
+import { useAuth } from '@/context/AuthContext'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -37,6 +38,7 @@ export function Mermas() {
   const hastaRef = useRef(finHoy())
   const { mermas, cargando, registrar, costoTotal } = useMermas(desdeRef.current, hastaRef.current)
   const { productos } = useProductos()
+  const { esAdmin } = useAuth()
   const toast = useToast()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -128,10 +130,12 @@ export function Mermas() {
             Productos dañados, vencidos o consumidos internamente — mes actual
           </p>
         </div>
-        <Button variant="primary" onClick={() => { resetForm(); setFormOpen(true) }}>
-          <Plus className="size-[18px]" />
-          <span className="hidden sm:inline">Registrar merma</span>
-        </Button>
+        {esAdmin && (
+          <Button variant="primary" onClick={() => { resetForm(); setFormOpen(true) }}>
+            <Plus className="size-[18px]" />
+            <span className="hidden sm:inline">Registrar merma</span>
+          </Button>
+        )}
       </div>
 
       {/* KPIs del mes */}

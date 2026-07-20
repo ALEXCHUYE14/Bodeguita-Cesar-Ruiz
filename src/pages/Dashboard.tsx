@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Activity,
   ArrowUpRight,
+  ArrowDownRight,
   TrendingDown,
   CalendarClock,
 } from 'lucide-react'
@@ -49,12 +50,137 @@ function diasHasta(fecha: string): number {
   return Math.round((vence.getTime() - hoy.getTime()) / 86400000)
 }
 
+// ── Comparativa entre periodos (esta semana vs. anterior, este mes vs. pasado) ──
+interface TotalesPeriodo {
+  total: number
+  count: number
+}
+interface Comparativo {
+  actual: TotalesPeriodo
+  anterior: TotalesPeriodo
+}
+
+function inicioSemanaLunes(d: Date): Date {
+  const x = new Date(d)
+  const dia = x.getDay() // 0=domingo..6=sabado
+  const diff = dia === 0 ? 6 : dia - 1
+  x.setDate(x.getDate() - diff)
+  x.setHours(0, 0, 0, 0)
+  return x
+}
+
+async function totalesEnRango(desde: Date, hasta: Date): Promise<TotalesPeriodo> {
+  const { data } = await supabase
+    .from('ventas')
+    .select('total')
+    .eq('anulada', false)
+    .gte('creado_en', desde.toISOString())
+    .lte('creado_en', hasta.toISOString())
+  const filas = data ?? []
+  return {
+    total: filas.reduce((s, v) => s + Number(v.total), 0),
+    count: filas.length,
+  }
+}
+
+/**
+ * Compara "lo que va" del periodo actual contra el MISMO numero de dias
+ * transcurridos del periodo anterior (no el periodo anterior completo).
+ * Sin esto, comparar 3 dias de esta semana contra los 7 dias completos de la
+ * semana pasada siempre mostraria una caida enganosa, aunque el ritmo de
+ * ventas sea igual o mejor.
+ */
+function useComparativaPeriodos() {
+  const [semana, setSemana] = useState<Comparativo | null>(null)
+  const [mes, setMes] = useState<Comparativo | null>(null)
+  const [cargando, setCargando] = useState(true)
+
+  useEffect(() => {
+    let activo = true
+    async function cargar() {
+      const ahora = finHoy()
+
+      const lunesEsta = inicioSemanaLunes(ahora)
+      const diasTranscurridos =
+        Math.floor((ahora.getTime() - lunesEsta.getTime()) / 86400000) + 1
+      const lunesPasada = new Date(lunesEsta)
+      lunesPasada.setDate(lunesPasada.getDate() - 7)
+      const finPasadaComparable = new Date(lunesPasada)
+      finPasadaComparable.setDate(finPasadaComparable.getDate() + diasTranscurridos - 1)
+      finPasadaComparable.setHours(23, 59, 59, 999)
+
+      const inicioEsteMes = inicioMes()
+      const diaHoy = ahora.getDate()
+      const inicioMesPasado = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1)
+      const ultimoDiaMesPasado = new Date(ahora.getFullYear(), ahora.getMonth(), 0).getDate()
+      const finMesPasadoComparable = new Date(
+        ahora.getFullYear(),
+        ahora.getMonth() - 1,
+        Math.min(diaHoy, ultimoDiaMesPasado),
+      )
+      finMesPasadoComparable.setHours(23, 59, 59, 999)
+
+      const [semActual, semAnterior, mesActual, mesAnterior] = await Promise.all([
+        totalesEnRango(lunesEsta, ahora),
+        totalesEnRango(lunesPasada, finPasadaComparable),
+        totalesEnRango(inicioEsteMes, ahora),
+        totalesEnRango(inicioMesPasado, finMesPasadoComparable),
+      ])
+
+      if (!activo) return
+      setSemana({ actual: semActual, anterior: semAnterior })
+      setMes({ actual: mesActual, anterior: mesAnterior })
+      setCargando(false)
+    }
+    cargar()
+    return () => {
+      activo = false
+    }
+  }, [])
+
+  return { semana, mes, cargando }
+}
+
+function pctCambio(actual: number, anterior: number): number {
+  if (anterior <= 0) return actual > 0 ? 100 : 0
+  return ((actual - anterior) / anterior) * 100
+}
+
+function TarjetaComparativa({ titulo, datos }: { titulo: string; datos: Comparativo }) {
+  const pct = pctCambio(datos.actual.total, datos.anterior.total)
+  const sube = pct >= 0
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="label">{titulo}</p>
+        <span
+          className={cx(
+            'flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-bold',
+            sube ? 'bg-accent-50 text-accent-700' : 'bg-red-50 text-red-600',
+          )}
+        >
+          {sube ? <ArrowUpRight className="size-3.5" /> : <ArrowDownRight className="size-3.5" />}
+          {Math.abs(pct).toFixed(0)}%
+        </span>
+      </div>
+      <p className="tabular font-display text-xl font-bold text-ink-900">
+        {money(datos.actual.total)}
+      </p>
+      <p className="mt-1 text-xs text-ink-400">
+        vs. {money(datos.anterior.total)} en el mismo periodo anterior · {datos.actual.count} venta
+        {datos.actual.count === 1 ? '' : 's'}
+      </p>
+    </Card>
+  )
+}
+
 export function Dashboard() {
   const { ventas, cargando } = useVentasRealtime()
   const { productos } = useProductos()
   const desdeRef = useRef(inicioMes())
   const hastaRef = useRef(finHoy())
   const { costoTotal: costMermasMes } = useMermas(desdeRef.current, hastaRef.current)
+  const { semana: semanaComp, mes: mesComp } = useComparativaPeriodos()
   const [topProductos, setTopProductos] = useState<{ nombre: string; cantidad: number }[]>([])
   const [pulso, setPulso] = useState(false)
 
@@ -197,6 +323,14 @@ export function Dashboard() {
           <p className="tabular font-display text-xl font-bold text-red-700">
             {money(costMermasMes)}
           </p>
+        </div>
+      )}
+
+      {/* Comparativa entre periodos */}
+      {semanaComp && mesComp && (
+        <div className="grid grid-cols-2 gap-3">
+          <TarjetaComparativa titulo="Esta semana vs. anterior" datos={semanaComp} />
+          <TarjetaComparativa titulo="Este mes vs. mes pasado" datos={mesComp} />
         </div>
       )}
 

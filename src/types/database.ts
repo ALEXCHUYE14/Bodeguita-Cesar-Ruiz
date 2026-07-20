@@ -1,6 +1,6 @@
 // Tipos del dominio del sistema Comercial Ruiz
 
-export type Rol = 'administrador' | 'cajero'
+export type Rol = 'administrador' | 'supervisor' | 'cajero'
 export type MetodoPago = 'efectivo' | 'yape' | 'fiado'
 export type TipoMovimiento = 'entrada' | 'salida' | 'ajuste' | 'venta' | 'devolucion'
 export type EstadoCompra = 'pagado' | 'pendiente'

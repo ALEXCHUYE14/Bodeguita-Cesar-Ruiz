@@ -11,8 +11,10 @@ import {
   ArrowDownLeft,
   MessageCircle,
   Copy,
+  AlertTriangle,
 } from 'lucide-react'
-import { useClientes } from '@/hooks/useClientes'
+import { useClientes, DIAS_DEUDA_VENCIDA } from '@/hooks/useClientes'
+import { useAuth } from '@/context/AuthContext'
 import { BRAND } from '@/config/brand'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
@@ -23,8 +25,9 @@ import type { ClienteCredito, PagoCredito } from '@/types/database'
 const VACIO = { nombre: '', telefono: '', direccion: '', limite_credito: '100' }
 
 export function Clientes() {
-  const { clientes, cargando, crear, actualizar, eliminar, registrarAbono, obtenerPagos } =
+  const { clientes, diasSinPago, cargando, crear, actualizar, eliminar, registrarAbono, obtenerPagos } =
     useClientes()
+  const { esAdmin } = useAuth()
   const toast = useToast()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -42,6 +45,14 @@ export function Clientes() {
   const totalDeuda = useMemo(
     () => clientes.reduce((s, c) => s + c.deuda_actual, 0),
     [clientes],
+  )
+
+  const clientesVencidos = useMemo(
+    () =>
+      clientes.filter(
+        (c) => c.deuda_actual > 0 && (diasSinPago.get(c.id) ?? 0) >= DIAS_DEUDA_VENCIDA,
+      ),
+    [clientes, diasSinPago],
   )
 
   function abrirNuevo() {
@@ -127,7 +138,12 @@ export function Clientes() {
   }
 
   function mensajeDeuda(c: ClienteCredito): string {
-    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *${BRAND.nombre}*. Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
+    const dias = diasSinPago.get(c.id) ?? 0
+    const aviso =
+      dias >= DIAS_DEUDA_VENCIDA
+        ? ` Notamos que ya pasaron ${dias} días sin un abono,`
+        : ''
+    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *${BRAND.nombre}*.${aviso} Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
   }
 
   function abrirWhatsApp(c: ClienteCredito) {
@@ -169,11 +185,33 @@ export function Clientes() {
             </span>
           </p>
         </div>
-        <Button variant="primary" onClick={abrirNuevo}>
-          <Plus className="size-[18px]" />
-          <span className="hidden sm:inline">Nuevo cliente</span>
-        </Button>
+        {esAdmin && (
+          <Button variant="primary" onClick={abrirNuevo}>
+            <Plus className="size-[18px]" />
+            <span className="hidden sm:inline">Nuevo cliente</span>
+          </Button>
+        )}
       </div>
+
+      {clientesVencidos.length > 0 && (
+        <div className="flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-red-100">
+            <AlertTriangle className="size-5 text-red-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-red-800">
+              {clientesVencidos.length} cliente{clientesVencidos.length === 1 ? '' : 's'} con deuda
+              vencida (+{DIAS_DEUDA_VENCIDA} días sin pago)
+            </p>
+            <p className="text-xs text-red-500">
+              Envíales un recordatorio por WhatsApp desde la lista de abajo
+            </p>
+          </div>
+          <p className="tabular font-display text-xl font-bold text-red-700">
+            {money(clientesVencidos.reduce((s, c) => s + c.deuda_actual, 0))}
+          </p>
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         <div className="hidden grid-cols-[1fr_auto_auto_auto_auto] gap-4 border-b border-ink-100 px-4 py-2.5 text-[0.7rem] font-semibold uppercase tracking-wider text-ink-400 lg:grid">
@@ -187,13 +225,15 @@ export function Clientes() {
         {cargando ? (
           <SkeletonList />
         ) : clientes.length === 0 ? (
-          <EmptyState onNuevo={abrirNuevo} />
+          <EmptyState onNuevo={abrirNuevo} puedeCrear={esAdmin} />
         ) : (
           <ul className="divide-y divide-ink-100">
             {clientes.map((c) => {
               const pct = c.limite_credito > 0 ? (c.deuda_actual / c.limite_credito) * 100 : 0
               const critico = pct >= 90
               const advertencia = pct >= 60
+              const dias = diasSinPago.get(c.id) ?? 0
+              const vencido = c.deuda_actual > 0 && dias >= DIAS_DEUDA_VENCIDA
               return (
                 <li
                   key={c.id}
@@ -246,7 +286,7 @@ export function Clientes() {
                   </div>
 
                   {/* Estado */}
-                  <div className="hidden w-24 justify-center lg:flex">
+                  <div className="hidden w-24 flex-col items-center justify-center gap-1 lg:flex">
                     {c.deuda_actual === 0 ? (
                       <Badge tone="success">Al día</Badge>
                     ) : critico ? (
@@ -255,6 +295,11 @@ export function Clientes() {
                       <Badge tone="warning">Moderado</Badge>
                     ) : (
                       <Badge tone="info">Activo</Badge>
+                    )}
+                    {vencido && (
+                      <Badge tone="danger" className="whitespace-nowrap">
+                        Vencido {dias}d
+                      </Badge>
                     )}
                   </div>
 
@@ -265,7 +310,7 @@ export function Clientes() {
                         <MessageCircle className="size-4 text-green-600" />
                       </IconBtn>
                     )}
-                    {c.deuda_actual > 0 && (
+                    {esAdmin && c.deuda_actual > 0 && (
                       <IconBtn title="Registrar abono" onClick={() => { setAbonoCliente(c); setMontoAbono(''); setNotaAbono('') }}>
                         <ArrowDownLeft className="size-4" />
                       </IconBtn>
@@ -273,12 +318,16 @@ export function Clientes() {
                     <IconBtn title="Historial" onClick={() => abrirHistorial(c)}>
                       <History className="size-4" />
                     </IconBtn>
-                    <IconBtn title="Editar" onClick={() => abrirEditar(c)}>
-                      <Pencil className="size-4" />
-                    </IconBtn>
-                    <IconBtn title="Eliminar" onClick={() => setConfirmando(c.id)} danger>
-                      <Trash2 className="size-4" />
-                    </IconBtn>
+                    {esAdmin && (
+                      <IconBtn title="Editar" onClick={() => abrirEditar(c)}>
+                        <Pencil className="size-4" />
+                      </IconBtn>
+                    )}
+                    {esAdmin && (
+                      <IconBtn title="Eliminar" onClick={() => setConfirmando(c.id)} danger>
+                        <Trash2 className="size-4" />
+                      </IconBtn>
+                    )}
                   </div>
 
                   {/* Acciones móvil */}
@@ -289,6 +338,7 @@ export function Clientes() {
                       </span>
                       <span className="text-xs text-ink-400">/ {money(c.limite_credito)}</span>
                     </div>
+                    {vencido && <Badge tone="danger">Vencido {dias}d</Badge>}
                     <div className="flex gap-1.5">
                       {c.deuda_actual > 0 && (
                         <button
@@ -298,7 +348,7 @@ export function Clientes() {
                           <MessageCircle className="size-3.5" /> WA
                         </button>
                       )}
-                      {c.deuda_actual > 0 && (
+                      {esAdmin && c.deuda_actual > 0 && (
                         <button
                           onClick={() => { setAbonoCliente(c); setMontoAbono(''); setNotaAbono('') }}
                           className="flex items-center gap-1 rounded-lg bg-accent-50 px-2.5 py-1.5 text-xs font-semibold text-accent-700"
@@ -312,12 +362,14 @@ export function Clientes() {
                       >
                         <History className="size-3.5" />
                       </button>
-                      <button
-                        onClick={() => abrirEditar(c)}
-                        className="flex items-center gap-1 rounded-lg bg-ink-100 px-2.5 py-1.5 text-xs font-semibold text-ink-600"
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
+                      {esAdmin && (
+                        <button
+                          onClick={() => abrirEditar(c)}
+                          className="flex items-center gap-1 rounded-lg bg-ink-100 px-2.5 py-1.5 text-xs font-semibold text-ink-600"
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -593,15 +645,17 @@ function SkeletonList() {
   )
 }
 
-function EmptyState({ onNuevo }: { onNuevo: () => void }) {
+function EmptyState({ onNuevo, puedeCrear }: { onNuevo: () => void; puedeCrear: boolean }) {
   return (
     <div className="grid place-items-center py-16 text-center">
       <User className="mb-3 size-8 text-ink-300" />
       <p className="text-sm font-medium text-ink-500">No hay clientes con fiado</p>
       <p className="mb-4 mt-1 text-xs text-ink-300">Registra clientes de confianza para ventas al crédito</p>
-      <Button variant="outline" size="sm" onClick={onNuevo}>
-        <Plus className="size-4" /> Nuevo cliente
-      </Button>
+      {puedeCrear && (
+        <Button variant="outline" size="sm" onClick={onNuevo}>
+          <Plus className="size-4" /> Nuevo cliente
+        </Button>
+      )}
     </div>
   )
 }

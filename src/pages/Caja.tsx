@@ -227,6 +227,7 @@ export function Caja() {
   const [procesando,   setProcesando]   = useState(false)
   const [generandoPDF, setGenerandoPDF] = useState(false)
   const [resumen,      setResumen]      = useState<ResumenCierre | null>(null)
+  const [descargandoId, setDescargandoId] = useState<string | null>(null)
 
   // ── Estado: filtros del historial ────────────────────────────────────────────
   const hoy = useMemo(() => ymd(new Date()), [])
@@ -326,6 +327,18 @@ export function Caja() {
       toast.error(e instanceof Error ? e.message : 'Error al cerrar la caja')
     } finally {
       setProcesando(false)
+    }
+  }
+
+  // ── Descargar de nuevo el reporte PDF de un cierre ya archivado ──────────────
+  async function descargarPDFHistorial(h: CajaRegistro) {
+    setDescargandoId(h.id)
+    try {
+      await generarReportePDF(h, toNum(h.monto_real))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo generar el PDF')
+    } finally {
+      setDescargandoId(null)
     }
   }
 
@@ -523,21 +536,37 @@ export function Caja() {
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="tabular text-sm font-bold text-ink-900">
-                        {money(hMonto + hEfectivo + hYape)}
-                      </p>
-                      <div className="mt-0.5">
-                        {h.estado === 'abierta' ? (
-                          <Badge tone="success">Abierta</Badge>
-                        ) : h.monto_real !== null ? (
-                          <Badge tone={hReal >= esperado ? 'success' : 'danger'}>
-                            {hReal >= esperado ? 'Cuadrado' : 'Descuadre'}
-                          </Badge>
-                        ) : (
-                          <Badge tone="info">Cerrada</Badge>
-                        )}
+                    <div className="flex items-center gap-2">
+                      <div className="text-right">
+                        <p className="tabular text-sm font-bold text-ink-900">
+                          {money(hMonto + hEfectivo + hYape)}
+                        </p>
+                        <div className="mt-0.5">
+                          {h.estado === 'abierta' ? (
+                            <Badge tone="success">Abierta</Badge>
+                          ) : h.monto_real !== null ? (
+                            <Badge tone={hReal >= esperado ? 'success' : 'danger'}>
+                              {hReal >= esperado ? 'Cuadrado' : 'Descuadre'}
+                            </Badge>
+                          ) : (
+                            <Badge tone="info">Cerrada</Badge>
+                          )}
+                        </div>
                       </div>
+                      {h.estado === 'cerrada' && (
+                        <button
+                          title="Descargar reporte PDF de este cierre"
+                          disabled={descargandoId === h.id}
+                          onClick={() => descargarPDFHistorial(h)}
+                          className="grid size-8 shrink-0 place-items-center rounded-lg text-ink-400 hover:bg-ink-100 hover:text-ink-800 disabled:opacity-40"
+                        >
+                          {descargandoId === h.id ? (
+                            <span className="size-4 animate-spin rounded-full border-2 border-ink-300 border-t-ink-600" />
+                          ) : (
+                            <FileDown className="size-4" />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </li>
                 )

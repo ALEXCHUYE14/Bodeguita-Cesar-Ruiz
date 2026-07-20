@@ -16,8 +16,15 @@ create extension if not exists "pgcrypto";
 -- 1. TIPOS ENUMERADOS
 -- ----------------------------------------------------------------------------
 do $$ begin
-  create type rol_usuario as enum ('administrador', 'cajero');
+  create type rol_usuario as enum ('administrador', 'supervisor', 'cajero');
 exception when duplicate_object then null; end $$;
+
+-- Migracion en caliente: agrega el rol "supervisor" si el tipo ya existia
+-- (proyectos creados antes de esta funcionalidad, con solo administrador/cajero).
+-- Supervisor puede ver reportes (Rentabilidad, Compras, Mermas, Clientes,
+-- Proveedores, Resumen) pero no crear/editar/eliminar nada — igual que un
+-- cajero para todo lo que no sea lectura de reportes.
+alter type rol_usuario add value if not exists 'supervisor';
 
 do $$ begin
   create type metodo_pago as enum ('efectivo', 'tarjeta', 'yape', 'plin', 'transferencia', 'fiado');
@@ -87,6 +94,32 @@ as $$
     where id = auth.uid() and rol = 'administrador' and activo = true
   );
 $$;
+
+-- La politica perfiles_update (mas abajo) permite a cualquier usuario
+-- actualizar SU PROPIA fila (para que pueda editar su nombre), pero eso
+-- tambien le permitiria, sin este trigger, subir su propio "rol" a
+-- administrador o reactivarse a si mismo llamando directamente a la API.
+-- Este trigger bloquea el cambio de rol/activo salvo que quien ejecute el
+-- update sea administrador (verificado en la base de datos, no en el cliente).
+create or replace function public.proteger_columnas_perfil()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if not public.es_admin() then
+    if new.rol is distinct from old.rol or new.activo is distinct from old.activo then
+      raise exception 'Solo un administrador puede cambiar el rol o el estado de un usuario.';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_perfiles_proteger on public.perfiles;
+create trigger trg_perfiles_proteger
+  before update on public.perfiles
+  for each row execute function public.proteger_columnas_perfil();
 
 -- ----------------------------------------------------------------------------
 -- 3. CATEGORIAS

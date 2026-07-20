@@ -2,8 +2,55 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { ClienteCredito, PagoCredito } from '@/types/database'
 
+// Dias sin ningun pago ni nueva venta al fiado a partir de los cuales se
+// considera "vencida" la deuda de un cliente (usado para alertas).
+export const DIAS_DEUDA_VENCIDA = 15
+
+// Para cada cliente con deuda, calcula la fecha de su ultimo movimiento de
+// credito (el pago mas reciente o la venta al fiado mas reciente, lo que sea
+// mas nuevo) y devuelve cuantos dias han pasado desde entonces.
+async function calcularDiasSinPago(clienteIds: string[]): Promise<Map<string, number>> {
+  const mapa = new Map<string, number>()
+  if (clienteIds.length === 0) return mapa
+
+  const [{ data: ventasFiado }, { data: pagos }] = await Promise.all([
+    supabase
+      .from('ventas')
+      .select('cliente_id, creado_en')
+      .eq('metodo', 'fiado')
+      .in('cliente_id', clienteIds)
+      .order('creado_en', { ascending: false }),
+    supabase
+      .from('pagos_credito')
+      .select('cliente_id, creado_en')
+      .in('cliente_id', clienteIds)
+      .order('creado_en', { ascending: false }),
+  ])
+
+  const ultimaFecha = new Map<string, string>()
+  // Ambas listas vienen ordenadas desc: el primer registro por cliente ya es
+  // el mas reciente de esa lista.
+  ;(ventasFiado ?? []).forEach((v) => {
+    if (v.cliente_id && !ultimaFecha.has(v.cliente_id)) ultimaFecha.set(v.cliente_id, v.creado_en)
+  })
+  ;(pagos ?? []).forEach((p) => {
+    const prev = ultimaFecha.get(p.cliente_id)
+    if (!prev || p.creado_en > prev) ultimaFecha.set(p.cliente_id, p.creado_en)
+  })
+
+  const ahora = Date.now()
+  clienteIds.forEach((id) => {
+    const fecha = ultimaFecha.get(id)
+    if (fecha) {
+      mapa.set(id, Math.floor((ahora - new Date(fecha).getTime()) / 86400000))
+    }
+  })
+  return mapa
+}
+
 export function useClientes() {
   const [clientes, setClientes] = useState<ClienteCredito[]>([])
+  const [diasSinPago, setDiasSinPago] = useState<Map<string, number>>(new Map())
   const [cargando, setCargando] = useState(true)
 
   const cargar = useCallback(async () => {
@@ -15,6 +62,9 @@ export function useClientes() {
       .order('nombre')
     setClientes(data ?? [])
     setCargando(false)
+
+    const conDeuda = (data ?? []).filter((c) => c.deuda_actual > 0).map((c) => c.id)
+    setDiasSinPago(await calcularDiasSinPago(conDeuda))
   }, [])
 
   useEffect(() => {
@@ -82,6 +132,8 @@ export function useClientes() {
         prev.map((x) => (x.id === clienteId ? clienteActual : x)),
       )
     }
+    // El abono es un movimiento de credito nuevo: recalcular su antiguedad.
+    setDiasSinPago((prev) => new Map(prev).set(clienteId, 0))
     return data
   }
 
@@ -98,6 +150,7 @@ export function useClientes() {
 
   return {
     clientes,
+    diasSinPago,
     cargando,
     cargar,
     crear,

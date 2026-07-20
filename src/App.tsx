@@ -14,7 +14,10 @@ import { Caja } from '@/pages/Caja'
 import { Proveedores } from '@/pages/Proveedores'
 import { Compras } from '@/pages/Compras'
 import { Mermas } from '@/pages/Mermas'
+import { Rentabilidad } from '@/pages/Rentabilidad'
 import { Configuracion } from '@/pages/Configuracion'
+import { tieneAcceso } from '@/utils/roles'
+import type { Rol } from '@/types/database'
 import type { ReactNode } from 'react'
 
 function Cargando() {
@@ -33,11 +36,11 @@ function Privado({ children }: { children: ReactNode }) {
   return <AppShell>{children}</AppShell>
 }
 
-/** Exige rol administrador. Cajero -> POS. */
-function SoloAdmin({ children }: { children: ReactNode }) {
-  const { esAdmin, cargando } = useAuth()
+/** Exige un rol minimo (cajero < supervisor < administrador). Sin acceso -> POS. */
+function SoloRol({ minRol, children }: { minRol: Rol; children: ReactNode }) {
+  const { perfil, cargando } = useAuth()
   if (cargando) return <Cargando />
-  if (!esAdmin) return <Navigate to="/pos" replace />
+  if (!tieneAcceso(perfil?.rol, minRol)) return <Navigate to="/pos" replace />
   return <>{children}</>
 }
 
@@ -63,9 +66,9 @@ function Rutas() {
         path="/"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="supervisor">
               <Dashboard />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />
@@ -102,12 +105,22 @@ function Rutas() {
         }
       />
       <Route
+        path="/rentabilidad"
+        element={
+          <Privado>
+            <SoloRol minRol="supervisor">
+              <Rentabilidad />
+            </SoloRol>
+          </Privado>
+        }
+      />
+      <Route
         path="/clientes"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="supervisor">
               <Clientes />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />
@@ -115,9 +128,9 @@ function Rutas() {
         path="/proveedores"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="supervisor">
               <Proveedores />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />
@@ -125,9 +138,9 @@ function Rutas() {
         path="/compras"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="supervisor">
               <Compras />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />
@@ -135,9 +148,9 @@ function Rutas() {
         path="/mermas"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="supervisor">
               <Mermas />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />
@@ -146,9 +159,9 @@ function Rutas() {
         path="/configuracion"
         element={
           <Privado>
-            <SoloAdmin>
+            <SoloRol minRol="administrador">
               <Configuracion />
-            </SoloAdmin>
+            </SoloRol>
           </Privado>
         }
       />

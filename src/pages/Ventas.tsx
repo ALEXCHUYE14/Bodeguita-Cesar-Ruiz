@@ -7,6 +7,7 @@ import {
   X,
   Ban,
   ChevronDown,
+  Download,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
@@ -18,12 +19,45 @@ import { useToast } from '@/components/ui/Toast'
 import {
   money,
   fechaHora,
+  fechaCorta,
   horaCorta,
   ETIQUETA_PAGO,
   ymd,
   cx,
 } from '@/utils/format'
+import { descargarCSV } from '@/utils/csv'
 import type { DetalleVenta, MetodoPago, Perfil, Venta } from '@/types/database'
+
+// ── Rangos de fecha alineados a calendario (semana/quincena/mes) ─────────────
+function inicioSemana(d: Date): Date {
+  // Lunes como inicio de semana
+  const x = new Date(d)
+  const dia = x.getDay() // 0=domingo..6=sabado
+  const diff = dia === 0 ? 6 : dia - 1
+  x.setDate(x.getDate() - diff)
+  return x
+}
+function inicioQuincena(d: Date): Date {
+  const x = new Date(d)
+  x.setDate(d.getDate() <= 15 ? 1 : 16)
+  return x
+}
+function finQuincena(d: Date): Date {
+  const x = new Date(d)
+  if (d.getDate() <= 15) x.setDate(15)
+  else x.setMonth(x.getMonth() + 1, 0) // ultimo dia del mes
+  return x
+}
+function inicioMesCal(d: Date): Date {
+  const x = new Date(d)
+  x.setDate(1)
+  return x
+}
+function finMesCal(d: Date): Date {
+  const x = new Date(d)
+  x.setMonth(x.getMonth() + 1, 0)
+  return x
+}
 
 const TONO_PAGO: Record<MetodoPago, 'neutral' | 'success' | 'info' | 'warning'> = {
   efectivo: 'success',
@@ -48,6 +82,7 @@ export function Ventas() {
   const [cargando, setCargando] = useState(true)
   const [filtrosOpen, setFiltrosOpen] = useState(false)
   const [ticket, setTicket] = useState<Venta | null>(null)
+  const [limiteAlcanzado, setLimiteAlcanzado] = useState(false)
 
   // Lista de cajeros para el filtro (solo admin)
   useEffect(() => {
@@ -67,7 +102,9 @@ export function Ventas() {
       .gte('creado_en', `${desde}T00:00:00`)
       .lte('creado_en', `${hasta}T23:59:59.999`)
       .order('numero', { ascending: false })
-      .limit(300)
+      // 3000 (antes 300): con reportes por quincena/mes un tope bajo
+      // truncaba silenciosamente el resumen y el CSV exportado.
+      .limit(3000)
 
     if (metodo) query = query.eq('metodo', metodo)
     if (esAdmin && cajeroId) query = query.eq('cajero_id', cajeroId)
@@ -75,6 +112,7 @@ export function Ventas() {
     const { data, error } = await query
     if (error) toast.error('No se pudo cargar el historial')
     setVentas(data ?? [])
+    setLimiteAlcanzado((data ?? []).length >= 3000)
     setCargando(false)
   }, [desde, hasta, metodo, cajeroId, esAdmin, toast])
 
@@ -130,6 +168,54 @@ export function Ventas() {
     }
   }, [filtradas, caja, hoy, desde, hasta])
 
+  // ── Resumen agrupado por día (para ver ventas por dia/semana/quincena/mes:
+  // el agrupamiento es siempre por dia; la vista de semana/quincena/mes surge
+  // de elegir un rango de fechas mas amplio con los atajos de abajo) ─────────
+  const resumenPorDia = useMemo(() => {
+    const mapa = new Map<string, { count: number; total: number; anuladas: number }>()
+    filtradas.forEach((v) => {
+      const dia = v.creado_en.slice(0, 10)
+      const prev = mapa.get(dia) ?? { count: 0, total: 0, anuladas: 0 }
+      if (v.anulada) {
+        prev.anuladas += 1
+      } else {
+        prev.count += 1
+        prev.total += Number(v.total)
+      }
+      mapa.set(dia, prev)
+    })
+    return [...mapa.entries()]
+      .map(([dia, r]) => ({ dia, ...r }))
+      .sort((a, b) => (a.dia < b.dia ? 1 : -1))
+  }, [filtradas])
+
+  function exportarCSV() {
+    const filas: (string | number)[][] = [
+      [`Reporte de ventas — ${BRAND.nombre}`],
+      [`Periodo: ${fechaCorta(`${desde}T00:00:00`)} al ${fechaCorta(`${hasta}T00:00:00`)}`],
+      [`Generado: ${fechaHora(new Date().toISOString())}`],
+      [],
+      ['RESUMEN POR DIA'],
+      ['Fecha', 'Transacciones', 'Anuladas', 'Total vendido'],
+      ...resumenPorDia.map((r) => [fechaCorta(`${r.dia}T00:00:00`), r.count, r.anuladas, r.total.toFixed(2)]),
+      [],
+      ['DETALLE DE VENTAS'],
+      ['Comprobante', 'Fecha', 'Hora', 'Cajero', 'Metodo', 'Cliente', 'Total', 'Anulada'],
+      ...filtradas.map((v) => [
+        v.numero,
+        fechaCorta(v.creado_en),
+        horaCorta(v.creado_en),
+        v.cajero_nombre ?? '',
+        ETIQUETA_PAGO[v.metodo] ?? v.metodo,
+        v.cliente_nombre ?? '',
+        Number(v.total).toFixed(2),
+        v.anulada ? 'Si' : 'No',
+      ]),
+    ]
+    descargarCSV(`ventas_${desde}_a_${hasta}.csv`, filas)
+    toast.exito('Reporte descargado')
+  }
+
   const filtrosActivos =
     (metodo ? 1 : 0) + (cajeroId ? 1 : 0) + (desde !== hoy || hasta !== hoy ? 1 : 0)
 
@@ -147,20 +233,37 @@ export function Ventas() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Ventas</h1>
           <p className="text-sm text-ink-400">Historial de transacciones y reimpresion</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setFiltrosOpen(true)}
-          className="relative"
-        >
-          <Filter className="size-4" /> Filtros
-          {filtrosActivos > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-accent-600 text-[0.65rem] font-bold text-white">
-              {filtrosActivos}
-            </span>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportarCSV}
+            disabled={filtradas.length === 0}
+          >
+            <Download className="size-4" /> <span className="hidden sm:inline">Descargar</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFiltrosOpen(true)}
+            className="relative"
+          >
+            <Filter className="size-4" /> Filtros
+            {filtrosActivos > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-accent-600 text-[0.65rem] font-bold text-white">
+                {filtrosActivos}
+              </span>
+            )}
+          </Button>
+        </div>
       </div>
+
+      {limiteAlcanzado && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-700">
+          Este periodo tiene más de 3000 ventas — se muestran y exportan solo las primeras 3000.
+          Reduce el rango de fechas para ver el total exacto.
+        </div>
+      )}
 
       {/* ── Métricas del periodo ── */}
       <div className="grid grid-cols-3 gap-3">
@@ -226,6 +329,34 @@ export function Ventas() {
           </p>
         </Card>
       </div>
+
+      {/* ── Ventas por día (aparece al elegir un rango de mas de un dia:
+          semana, quincena, mes o un rango personalizado) ── */}
+      {resumenPorDia.length > 1 && (
+        <Card className="overflow-hidden">
+          <div className="border-b border-ink-100 px-4 py-2.5">
+            <h3 className="text-sm font-bold text-ink-900">Ventas por día</h3>
+          </div>
+          <ul className="divide-y divide-ink-100">
+            {resumenPorDia.map((r) => (
+              <li key={r.dia} className="flex items-center justify-between px-4 py-2.5">
+                <div>
+                  <p className="text-sm font-semibold text-ink-800">
+                    {fechaCorta(`${r.dia}T00:00:00`)}
+                  </p>
+                  <p className="text-xs text-ink-400">
+                    {r.count} venta{r.count === 1 ? '' : 's'}
+                    {r.anuladas > 0 && ` · ${r.anuladas} anulada${r.anuladas === 1 ? '' : 's'}`}
+                  </p>
+                </div>
+                <p className="tabular font-display text-sm font-bold text-ink-900">
+                  {money(r.total)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {/* Buscador */}
       <div className="relative">
@@ -443,6 +574,34 @@ export function Ventas() {
                 {r.l}
               </button>
             ))}
+          </div>
+
+          <div>
+            <label className="label mb-1.5 block">Periodo (alineado al calendario)</label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { l: 'Esta semana', ini: inicioSemana, fin: () => new Date() },
+                { l: 'Esta quincena', ini: inicioQuincena, fin: finQuincena },
+                { l: 'Este mes', ini: inicioMesCal, fin: finMesCal },
+              ].map((r) => (
+                <button
+                  key={r.l}
+                  className="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
+                  onClick={() => {
+                    const hoyDate = new Date()
+                    const finCalculado = r.fin(hoyDate)
+                    // El fin de quincena/mes puede caer en el futuro respecto
+                    // a hoy (ej. mitad de mes) — se limita a hoy para no
+                    // superar el "max" del input de fecha ni buscar ventas
+                    // que aun no existen.
+                    setDesde(ymd(r.ini(hoyDate)))
+                    setHasta(ymd(finCalculado > hoyDate ? hoyDate : finCalculado))
+                  }}
+                >
+                  {r.l}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </Sheet>

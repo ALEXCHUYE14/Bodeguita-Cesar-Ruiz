@@ -1,15 +1,48 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { Store, LogOut } from 'lucide-react'
 import { NAV } from './nav'
 import { useAuth } from '@/context/AuthContext'
+import { useToast } from '@/components/ui/Toast'
+import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
-import { cx } from '@/utils/format'
+import { cx, ymd } from '@/utils/format'
+import { tieneAcceso } from '@/utils/roles'
+
+/**
+ * Avisa una sola vez por sesion/dia (sessionStorage) si hay productos con
+ * stock bajo o agotado. AppShell se vuelve a montar en cada navegacion entre
+ * rutas (cada <Route> arma su propio <Privado><AppShell/></Privado>), asi que
+ * sin este guard el aviso se repetiria cada vez que el usuario cambia de pagina.
+ */
+function useAvisoStockBajo() {
+  const toast = useToast()
+  useEffect(() => {
+    const clave = `stock-bajo-visto-${ymd(new Date())}`
+    if (sessionStorage.getItem(clave)) return
+    sessionStorage.setItem(clave, '1')
+
+    supabase
+      .from('productos')
+      .select('stock_actual, stock_minimo')
+      .eq('activo', true)
+      .then(({ data }) => {
+        const bajos = (data ?? []).filter((p) => p.stock_actual <= p.stock_minimo)
+        if (bajos.length > 0) {
+          toast.info(
+            `${bajos.length} producto${bajos.length === 1 ? '' : 's'} con stock bajo o agotado. Revisa Inventario.`,
+          )
+        }
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { perfil, esAdmin, signOut } = useAuth()
+  const { perfil, signOut } = useAuth()
   const navigate = useNavigate()
-  const items = NAV.filter((i) => !i.soloAdmin || esAdmin)
+  const items = NAV.filter((i) => tieneAcceso(perfil?.rol, i.minRol))
+  useAvisoStockBajo()
 
   // El admin muestra el operador de marca ("Cesar Ruiz"); los cajeros muestran su primer nombre
   const nombreDisplay =

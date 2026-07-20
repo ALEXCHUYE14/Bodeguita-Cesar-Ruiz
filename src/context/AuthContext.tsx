@@ -14,6 +14,11 @@ interface AuthState {
   perfil: Perfil | null
   cargando: boolean
   esAdmin: boolean
+  /** Rol intermedio: puede ver reportes (Rentabilidad, Compras, Mermas,
+   *  Clientes, Proveedores, Resumen) pero no crear/editar/eliminar nada. */
+  esSupervisor: boolean
+  /** true para administrador o supervisor — util para gatear paginas de solo lectura. */
+  puedeVerReportes: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
@@ -94,11 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPerfil(null)
   }
 
+  const esAdmin = perfil?.rol === 'administrador'
+  const esSupervisor = perfil?.rol === 'supervisor'
+
   const value: AuthState = {
     session,
     perfil,
     cargando,
-    esAdmin: perfil?.rol === 'administrador',
+    esAdmin,
+    esSupervisor,
+    puedeVerReportes: esAdmin || esSupervisor,
     signIn,
     signOut,
   }
