@@ -261,9 +261,26 @@ export function Receipt({ open, onClose, venta, items }: Props) {
     w.document.write(html)
     w.document.close()
     w.focus()
+
+    // Cierra la ventana solo cuando el navegador termina con el dialogo de
+    // impresion (evento "afterprint"), no antes. Cerrarla justo despues de
+    // llamar a print() -como se hacia antes- deja la vista previa en blanco:
+    // en navegadores modernos print() no bloquea la ejecucion, asi que el
+    // cierre ocurria mientras el navegador todavia estaba renderizando el
+    // contenido para imprimir.
+    let cerrada = false
+    const cerrar = () => {
+      if (cerrada) return
+      cerrada = true
+      w.close()
+    }
+    w.addEventListener('afterprint', cerrar)
+    // Respaldo por si el navegador no dispara "afterprint" (pasa en algunos
+    // flujos de impresion a impresoras termicas/Bluetooth).
+    setTimeout(cerrar, 60000)
+
     setTimeout(() => {
       w.print()
-      w.close()
     }, 350)
   }
 

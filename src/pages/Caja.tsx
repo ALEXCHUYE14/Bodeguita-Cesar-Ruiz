@@ -203,6 +203,10 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
     w.document.write(html)
     w.document.close()
     w.focus()
+    // Cierra la ventana del reporte cuando el usuario termina con el dialogo
+    // de impresion (no antes: cerrarla justo tras llamar a print() deja la
+    // vista previa en blanco, porque el navegador aun esta renderizando).
+    w.addEventListener('afterprint', () => w.close())
     setTimeout(() => { w.print() }, 600)
   } catch (err) {
     w.close()
