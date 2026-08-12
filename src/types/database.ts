@@ -6,6 +6,16 @@ export type TipoMovimiento = 'entrada' | 'salida' | 'ajuste' | 'venta' | 'devolu
 export type EstadoCompra = 'pagado' | 'pendiente'
 export type MotivoMerma = 'vencido' | 'danado' | 'consumo_interno' | 'otro'
 export type EstadoCaja = 'abierta' | 'cerrada'
+export type CategoriaEgreso =
+  | 'alquiler'
+  | 'servicios'
+  | 'sueldos'
+  | 'transporte'
+  | 'insumos'
+  | 'impuestos'
+  | 'mantenimiento'
+  | 'otro'
+export type MetodoEgreso = 'efectivo' | 'yape' | 'transferencia' | 'tarjeta'
 
 export type Perfil = {
   id: string
@@ -123,6 +133,7 @@ export type CajaRegistro = {
   total_efectivo: number
   total_yape: number
   total_fiado: number
+  total_egresos: number
   monto_real: number | null
   estado: EstadoCaja
   abierta_en: string
@@ -176,6 +187,20 @@ export type Merma = {
   creado_en: string
 }
 
+export type Egreso = {
+  id: string
+  concepto: string
+  categoria: CategoriaEgreso
+  monto: number
+  metodo: MetodoEgreso
+  caja_id: string | null
+  usuario_id: string | null
+  usuario_nombre: string | null
+  fecha: string
+  notas: string | null
+  creado_en: string
+}
+
 export type ItemCarrito = {
   producto: Producto
   cantidad: number
@@ -201,6 +226,7 @@ export interface Database {
       compras: Tabla<Compra>
       detalle_compras: Tabla<DetalleCompra>
       mermas: Tabla<Merma>
+      egresos: Tabla<Egreso>
     }
     Views: Record<string, never>
     Functions: {
@@ -239,6 +265,18 @@ export interface Database {
       }
       anular_venta: { Args: { p_venta_id: string }; Returns: Venta }
       es_admin: { Args: Record<string, never>; Returns: boolean }
+      registrar_egreso: {
+        Args: {
+          p_concepto: string
+          p_categoria: CategoriaEgreso
+          p_monto: number
+          p_metodo?: MetodoEgreso
+          p_caja_id?: string | null
+          p_notas?: string | null
+        }
+        Returns: Egreso
+      }
+      eliminar_egreso: { Args: { p_id: string }; Returns: void }
     }
     Enums: {
       rol_usuario: Rol

@@ -7,6 +7,7 @@ export interface ResumenCierre {
   total_efectivo: number
   total_yape: number
   total_fiado: number
+  total_egresos: number
   esperado_efectivo: number
   ingresado_real: number
   diferencia: number
@@ -123,9 +124,11 @@ export function useCaja(cajeroId: string | null) {
     const totalEfectivo = toNum(caja.total_efectivo)
     const totalYape     = toNum(caja.total_yape)
     const totalFiado    = toNum(caja.total_fiado)
+    const totalEgresos  = toNum(caja.total_egresos)
     const montoRealNum  = toNum(montoReal)
 
-    const esperado   = montoInicial + totalEfectivo
+    // Efectivo esperado = fondo inicial + ventas en efectivo - salidas de caja en efectivo
+    const esperado   = montoInicial + totalEfectivo - totalEgresos
     const diferencia = montoRealNum - esperado
 
     const { data, error } = await supabase
@@ -149,6 +152,7 @@ export function useCaja(cajeroId: string | null) {
       total_efectivo:    totalEfectivo,
       total_yape:        totalYape,
       total_fiado:       totalFiado,
+      total_egresos:     totalEgresos,
       esperado_efectivo: esperado,
       ingresado_real:    montoRealNum,
       diferencia,
@@ -186,8 +190,10 @@ export function useCaja(cajeroId: string | null) {
     )
   }
 
-  // Efectivo en caja = fondo inicial + ventas en efectivo
-  const total = caja ? toNum(caja.monto_inicial) + toNum(caja.total_efectivo) : 0
+  // Efectivo en caja = fondo inicial + ventas en efectivo - salidas de caja en efectivo
+  const total = caja
+    ? toNum(caja.monto_inicial) + toNum(caja.total_efectivo) - toNum(caja.total_egresos)
+    : 0
 
   return {
     caja,

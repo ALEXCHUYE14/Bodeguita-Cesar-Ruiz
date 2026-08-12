@@ -222,11 +222,17 @@ create table if not exists public.cajas (
   total_efectivo  numeric(10,2) not null default 0,
   total_yape      numeric(10,2) not null default 0,
   total_fiado     numeric(10,2) not null default 0,
+  total_egresos   numeric(10,2) not null default 0,
   monto_real      numeric(10,2),
   estado          estado_caja not null default 'abierta',
   abierta_en      timestamptz not null default now(),
   cerrada_en      timestamptz
 );
+
+-- Migracion en caliente (proyectos creados antes de "egresos").
+alter table public.cajas add column if not exists total_egresos numeric(10,2) not null default 0;
+comment on column public.cajas.total_egresos is
+  'Suma de salidas de caja en efectivo durante el turno (ver tabla egresos). Se resta del efectivo esperado al cerrar caja.';
 
 create index if not exists idx_cajas_cajero on public.cajas (cajero_id);
 create index if not exists idx_cajas_estado on public.cajas (estado);
@@ -415,7 +421,43 @@ alter table public.mermas alter column cantidad type double precision using cant
 create index if not exists idx_mermas_fecha on public.mermas (creado_en desc);
 
 -- ----------------------------------------------------------------------------
--- 15. STORAGE - BUCKET DE FOTOS DE PRODUCTOS
+-- 15. EGRESOS (gastos del negocio: alquiler, servicios, sueldos, salidas de
+--     caja para gastos menores, etc.)
+-- ----------------------------------------------------------------------------
+create table if not exists public.egresos (
+  id              uuid primary key default gen_random_uuid(),
+  concepto        text not null,
+  categoria       text not null default 'otro',
+  monto           numeric(10,2) not null check (monto > 0),
+  metodo          text not null default 'efectivo',
+  -- Si se registra durante un turno de caja abierto y se paga en efectivo,
+  -- se descuenta del efectivo esperado al cerrar esa caja (ver RPC registrar_egreso).
+  caja_id         uuid references public.cajas(id) on delete set null,
+  usuario_id      uuid references public.perfiles(id) on delete set null,
+  usuario_nombre  text,
+  fecha           date not null default current_date,
+  notas           text,
+  creado_en       timestamptz not null default now()
+);
+
+do $$ begin
+  alter table public.egresos add constraint egresos_categoria_check
+    check (categoria in ('alquiler', 'servicios', 'sueldos', 'transporte', 'insumos', 'impuestos', 'mantenimiento', 'otro'));
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter table public.egresos add constraint egresos_metodo_check
+    check (metodo in ('efectivo', 'yape', 'transferencia', 'tarjeta'));
+exception when duplicate_object then null; end $$;
+
+create index if not exists idx_egresos_fecha on public.egresos (fecha desc);
+create index if not exists idx_egresos_caja  on public.egresos (caja_id);
+
+comment on table public.egresos is
+  'Gastos del negocio. Los ligados a una caja (caja_id) y pagados en efectivo descuentan el efectivo esperado de ese turno.';
+
+-- ----------------------------------------------------------------------------
+-- 16. STORAGE - BUCKET DE FOTOS DE PRODUCTOS
 -- ----------------------------------------------------------------------------
 -- El frontend (useProductoImagen.ts) sube las fotos a este bucket y usa
 -- getPublicUrl(), por lo que debe existir y ser publico para lectura.
@@ -759,6 +801,99 @@ begin
 end;
 $$;
 
+-- ----------------------------------------------------------------------------
+-- RPC 7: REGISTRAR EGRESO (gasto del negocio o salida de caja)
+-- ----------------------------------------------------------------------------
+-- Todas las escrituras a "egresos" pasan por este RPC (no hay politica RLS de
+-- insert directa) para que el descuento del efectivo esperado de la caja
+-- quede siempre sincronizado con el registro del gasto, de forma atomica.
+create or replace function public.registrar_egreso(
+  p_concepto  text,
+  p_categoria text,
+  p_monto     numeric,
+  p_metodo    text default 'efectivo',
+  p_caja_id   uuid default null,
+  p_notas     text default null
+)
+returns public.egresos
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_egreso  public.egresos%rowtype;
+  v_caja    public.cajas%rowtype;
+  v_nombre  text;
+  v_metodo  text := coalesce(nullif(btrim(p_metodo), ''), 'efectivo');
+begin
+  if p_concepto is null or btrim(p_concepto) = '' then
+    raise exception 'El concepto es obligatorio.';
+  end if;
+  if p_monto is null or p_monto <= 0 then
+    raise exception 'El monto debe ser mayor a 0.';
+  end if;
+
+  if p_caja_id is not null then
+    select * into v_caja from public.cajas where id = p_caja_id for update;
+    if not found then
+      raise exception 'Caja no encontrada.';
+    end if;
+    -- Un cajero solo puede registrar salidas contra su propia caja; un
+    -- administrador puede hacerlo contra cualquiera (ej. registro retroactivo).
+    if v_caja.cajero_id is distinct from auth.uid() and not public.es_admin() then
+      raise exception 'Solo puedes registrar salidas en tu propia caja.';
+    end if;
+  end if;
+
+  select nombre into v_nombre from public.perfiles where id = auth.uid();
+
+  insert into public.egresos (
+    concepto, categoria, monto, metodo, caja_id, usuario_id, usuario_nombre, notas
+  ) values (
+    btrim(p_concepto), coalesce(nullif(btrim(p_categoria), ''), 'otro'), p_monto, v_metodo,
+    p_caja_id, auth.uid(), v_nombre, p_notas
+  ) returning * into v_egreso;
+
+  -- Solo las salidas en efectivo ligadas a una caja afectan el efectivo
+  -- esperado de ese turno (un gasto pagado por Yape/transferencia no saca
+  -- dinero fisico de la caja).
+  if p_caja_id is not null and v_metodo = 'efectivo' then
+    update public.cajas set total_egresos = total_egresos + p_monto where id = p_caja_id;
+  end if;
+
+  return v_egreso;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- RPC 8: ELIMINAR EGRESO (solo admin) - revierte el efectivo esperado si aplica
+-- ----------------------------------------------------------------------------
+create or replace function public.eliminar_egreso(p_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_egreso public.egresos%rowtype;
+begin
+  if not public.es_admin() then
+    raise exception 'Solo un administrador puede eliminar egresos.';
+  end if;
+
+  select * into v_egreso from public.egresos where id = p_id;
+  if not found then
+    raise exception 'Egreso no encontrado.';
+  end if;
+
+  if v_egreso.caja_id is not null and v_egreso.metodo = 'efectivo' then
+    update public.cajas
+      set total_egresos = greatest(total_egresos - v_egreso.monto, 0)
+      where id = v_egreso.caja_id;
+  end if;
+
+  delete from public.egresos where id = p_id;
+end;
+$$;
+
 -- ============================================================================
 -- ROW LEVEL SECURITY
 -- ============================================================================
@@ -775,6 +910,7 @@ alter table public.proveedores             enable row level security;
 alter table public.compras                 enable row level security;
 alter table public.detalle_compras         enable row level security;
 alter table public.mermas                  enable row level security;
+alter table public.egresos                 enable row level security;
 
 -- PERFILES
 drop policy if exists perfiles_select on public.perfiles;
@@ -874,6 +1010,13 @@ create policy mermas_select on public.mermas for select
 drop policy if exists mermas_write on public.mermas;
 create policy mermas_write on public.mermas for all
   to authenticated using (public.es_admin()) with check (public.es_admin());
+
+-- EGRESOS (sin politicas de insert/update/delete directas a proposito: toda
+-- escritura pasa por los RPC registrar_egreso / eliminar_egreso, que son
+-- security definer y validan permisos y sincronizan cajas.total_egresos).
+drop policy if exists egresos_select on public.egresos;
+create policy egresos_select on public.egresos for select
+  to authenticated using (true);
 
 -- ============================================================================
 -- REALTIME: publicar tablas para sincronizacion instantanea

@@ -13,6 +13,7 @@ import {
   Filter,
   Trash2,
   X,
+  ArrowUpFromLine,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useCajaCtx } from '@/context/CajaContext'
@@ -46,27 +47,40 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
   )
 
   try {
-    const { data: ventasData, error } = await supabase
-      .from('ventas')
-      .select('*')
-      .eq('caja_id', cajaData.id)
-      .order('creado_en', { ascending: true })
+    const [{ data: ventasData, error }, { data: egresosData, error: errorEgresos }] = await Promise.all([
+      supabase
+        .from('ventas')
+        .select('*')
+        .eq('caja_id', cajaData.id)
+        .order('creado_en', { ascending: true }),
+      supabase
+        .from('egresos')
+        .select('*')
+        .eq('caja_id', cajaData.id)
+        .order('creado_en', { ascending: true }),
+    ])
 
     if (error) throw error
+    if (errorEgresos) throw errorEgresos
 
     const ventas = ventasData ?? []
     const ventasValidas  = ventas.filter((v) => !v.anulada)
     const ventasAnuladas = ventas.filter((v) => v.anulada)
+    const egresos = egresosData ?? []
 
     // toNum() antes de reduce previene concatenación si Supabase devolvió strings
     const totalEfectivo = ventasValidas.filter((v) => v.metodo === 'efectivo').reduce((s, v) => s + toNum(v.total), 0)
     const totalYape     = ventasValidas.filter((v) => v.metodo === 'yape').reduce((s, v) => s + toNum(v.total), 0)
     const totalFiado    = ventasValidas.filter((v) => v.metodo === 'fiado').reduce((s, v) => s + toNum(v.total), 0)
     const totalGeneral  = ventasValidas.reduce((s, v) => s + toNum(v.total), 0)
+    const totalEgresos  = egresos.reduce((s, e) => s + toNum(e.monto), 0)
+    const totalEgresosEfectivo = egresos
+      .filter((e) => e.metodo === 'efectivo')
+      .reduce((s, e) => s + toNum(e.monto), 0)
 
     const montoInicial      = toNum(cajaData.monto_inicial)
     const totalEfectivoCaja = toNum(cajaData.total_efectivo)
-    const esperadoEfectivo  = montoInicial + totalEfectivoCaja
+    const esperadoEfectivo  = montoInicial + totalEfectivoCaja - totalEgresosEfectivo
     const diferencia        = toNum(montoRealContado) - esperadoEfectivo
 
     const diferenciaColor = diferencia >= 0 ? '#065f46' : '#991b1b'
@@ -91,6 +105,31 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
             )
             .join('')
         : `<tr><td colspan="5" style="text-align:center;padding:16px;color:#aaa;">Sin ventas registradas en este turno</td></tr>`
+
+    const filasEgresos = egresos
+      .map(
+        (e) => `
+          <tr>
+            <td class="center">${horaCorta(e.creado_en)}</td>
+            <td>${e.concepto}</td>
+            <td class="center"><span class="badge badge-fiado">${e.metodo}</span></td>
+            <td class="right money">${money(toNum(e.monto))}</td>
+          </tr>`,
+      )
+      .join('')
+
+    const seccionEgresos =
+      egresos.length > 0
+        ? `
+  <div class="section">
+    <div class="section-title">Salidas de Caja del Turno</div>
+    <table>
+      <thead><tr><th class="center">Hora</th><th>Concepto</th><th class="center">Método</th><th class="right">Monto</th></tr></thead>
+      <tbody>${filasEgresos}</tbody>
+      <tfoot><tr><td colspan="3"><b>TOTAL SALIDAS (${egresos.length})</b></td><td class="right">${money(totalEgresos)}</td></tr></tfoot>
+    </table>
+  </div>`
+        : ''
 
     const html = `<!DOCTYPE html>
 <html lang="es">
@@ -181,7 +220,7 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       <tbody>${filasVentas}</tbody>
       ${ventasValidas.length > 0 ? `<tfoot><tr><td colspan="4"><b>TOTAL VENDIDO (${ventasValidas.length} ventas válidas)</b></td><td class="right">${money(totalGeneral)}</td></tr></tfoot>` : ''}
     </table>
-  </div>
+  </div>${seccionEgresos}
   <div class="section">
     <div class="section-title">Resumen Financiero del Día</div>
     <div class="summary-grid">
@@ -190,6 +229,7 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       <div class="summary-card fiado"><div class="summary-label">Fiado</div><div class="summary-value">${money(totalFiado)}</div></div>
     </div>
     <div class="total-card"><span class="total-label">TOTAL VENDIDO (Efectivo + Yape + Fiado)</span><span class="total-value">${money(totalGeneral)}</span></div>
+    ${totalEgresos > 0 ? `<div class="total-card" style="background:#7f1d1d;"><span class="total-label">SALIDAS DE CAJA (todas)</span><span class="total-value">- ${money(totalEgresos)}</span></div>` : ''}
     <div class="balance-card">
       <div class="balance-desc">Efectivo esperado: <b>${money(esperadoEfectivo)}</b> &nbsp;·&nbsp; Contado: <b>${money(toNum(montoRealContado))}</b> &nbsp;·&nbsp; <b>${diferencia >= 0 ? 'Sobrante' : 'Faltante'}</b></div>
       <div class="balance-value">${diferencia >= 0 ? '+' : ''}${money(diferencia)}</div>
@@ -218,7 +258,7 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
 
 export function Caja() {
   const { perfil, esAdmin, signOut } = useAuth()
-  const { caja, historial, cargando, abrir, cerrar, recargarHistorial } = useCajaCtx()
+  const { caja, historial, cargando, abrir, cerrar, recargar, recargarHistorial } = useCajaCtx()
   const navigate = useNavigate()
   const toast    = useToast()
 
@@ -232,6 +272,12 @@ export function Caja() {
   const [generandoPDF, setGenerandoPDF] = useState(false)
   const [resumen,      setResumen]      = useState<ResumenCierre | null>(null)
   const [descargandoId, setDescargandoId] = useState<string | null>(null)
+
+  // ── Estado: salida de caja (gasto menor pagado en efectivo durante el turno) ──
+  const [salidaOpen,       setSalidaOpen]       = useState(false)
+  const [salidaConcepto,   setSalidaConcepto]   = useState('')
+  const [salidaMonto,      setSalidaMonto]      = useState('')
+  const [registrandoSalida, setRegistrandoSalida] = useState(false)
 
   // ── Estado: filtros del historial ────────────────────────────────────────────
   const hoy = useMemo(() => ymd(new Date()), [])
@@ -334,6 +380,40 @@ export function Caja() {
     }
   }
 
+  // ── Salida de caja: gasto menor pagado en efectivo durante el turno ─────────
+  async function confirmarSalida() {
+    if (!caja) return
+    if (!salidaConcepto.trim()) {
+      toast.error('Describe en que se gasto el dinero.')
+      return
+    }
+    const monto = parseFloat(salidaMonto)
+    if (!monto || monto <= 0) {
+      toast.error('Ingresa un monto valido.')
+      return
+    }
+    setRegistrandoSalida(true)
+    try {
+      const { error } = await supabase.rpc('registrar_egreso', {
+        p_concepto: salidaConcepto.trim(),
+        p_categoria: 'otro',
+        p_monto: monto,
+        p_metodo: 'efectivo',
+        p_caja_id: caja.id,
+      })
+      if (error) throw error
+      toast.exito('Salida de caja registrada')
+      setSalidaOpen(false)
+      setSalidaConcepto('')
+      setSalidaMonto('')
+      recargar()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al registrar la salida')
+    } finally {
+      setRegistrandoSalida(false)
+    }
+  }
+
   // ── Descargar de nuevo el reporte PDF de un cierre ya archivado ──────────────
   async function descargarPDFHistorial(h: CajaRegistro) {
     setDescargandoId(h.id)
@@ -394,13 +474,21 @@ export function Caja() {
             <LockOpen className="size-[18px]" /> Abrir caja
           </Button>
         ) : (
-          <Button
-            variant="outline"
-            className="border-red-200 text-red-700 hover:bg-red-50"
-            onClick={() => { setMontoReal(''); setCerrarOpen(true) }}
-          >
-            <Lock className="size-[18px]" /> Cerrar caja
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { setSalidaConcepto(''); setSalidaMonto(''); setSalidaOpen(true) }}
+            >
+              <ArrowUpFromLine className="size-[18px]" /> <span className="hidden sm:inline">Salida de caja</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="border-red-200 text-red-700 hover:bg-red-50"
+              onClick={() => { setMontoReal(''); setCerrarOpen(true) }}
+            >
+              <Lock className="size-[18px]" /> Cerrar caja
+            </Button>
+          </div>
         )}
       </div>
 
@@ -447,8 +535,17 @@ export function Caja() {
             valor={money(toNum(caja.total_fiado))}
             color="text-amber-700"
             bg="bg-amber-50"
-            className="col-span-2 lg:col-span-1"
           />
+          {toNum(caja.total_egresos) > 0 && (
+            <KpiCaja
+              icon={ArrowUpFromLine}
+              label="Salidas de caja"
+              valor={`- ${money(toNum(caja.total_egresos))}`}
+              color="text-red-700"
+              bg="bg-red-50"
+              className="col-span-2 lg:col-span-1"
+            />
+          )}
         </div>
       ) : (
         <div className="rounded-2xl border-2 border-dashed border-ink-200 p-10 text-center">
@@ -512,8 +609,9 @@ export function Caja() {
                 const hMonto    = toNum(h.monto_inicial)
                 const hEfectivo = toNum(h.total_efectivo)
                 const hYape     = toNum(h.total_yape)
+                const hEgresos  = toNum(h.total_egresos)
                 const hReal     = toNum(h.monto_real)
-                const esperado  = hMonto + hEfectivo
+                const esperado  = hMonto + hEfectivo - hEgresos
 
                 return (
                   <li key={h.id} className="flex items-center justify-between px-4 py-3">
@@ -632,6 +730,56 @@ export function Caja() {
       </Sheet>
 
       {/* ══════════════════════════════════════════════════════════════════════════
+          Sheet: salida de caja (gasto menor pagado en efectivo durante el turno)
+      ══════════════════════════════════════════════════════════════════════════ */}
+      <Sheet
+        open={salidaOpen}
+        onClose={() => !registrandoSalida && setSalidaOpen(false)}
+        title="Salida de caja"
+        maxWidth="max-w-sm"
+        footer={
+          <Button
+            variant="secondary"
+            size="lg"
+            className="w-full"
+            loading={registrandoSalida}
+            onClick={confirmarSalida}
+          >
+            <ArrowUpFromLine className="size-5" /> Registrar salida
+          </Button>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            Para gastos menores pagados en efectivo directamente desde la caja (ej. mototaxi,
+            bolsas, propina de un pedido). Se descuenta del efectivo esperado al cerrar el turno.
+          </div>
+          <label className="block">
+            <span className="label mb-1.5 block">¿En que se gasto? *</span>
+            <input
+              className="input"
+              value={salidaConcepto}
+              onChange={(e) => setSalidaConcepto(e.target.value)}
+              placeholder="Mototaxi del pedido"
+              autoFocus
+            />
+          </label>
+          <label className="block">
+            <span className="label mb-1.5 block">Monto (S/) *</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              className="input tabular text-xl"
+              value={salidaMonto}
+              onChange={(e) => setSalidaMonto(e.target.value)}
+              placeholder="0.00"
+            />
+          </label>
+        </div>
+      </Sheet>
+
+      {/* ══════════════════════════════════════════════════════════════════════════
           Sheet: cerrar caja
       ══════════════════════════════════════════════════════════════════════════ */}
       <Sheet
@@ -667,10 +815,13 @@ export function Caja() {
             <div className="rounded-xl bg-ink-50 p-4 text-sm space-y-1.5">
               <InfoRow k="Fondo inicial"    v={money(toNum(caja.monto_inicial))} />
               <InfoRow k="Ventas efectivo"  v={money(toNum(caja.total_efectivo))} />
+              {toNum(caja.total_egresos) > 0 && (
+                <InfoRow k="Salidas de caja" v={`- ${money(toNum(caja.total_egresos))}`} />
+              )}
               <div className="border-t border-ink-200 pt-1.5">
                 <InfoRow
                   k="Efectivo esperado"
-                  v={money(toNum(caja.monto_inicial) + toNum(caja.total_efectivo))}
+                  v={money(toNum(caja.monto_inicial) + toNum(caja.total_efectivo) - toNum(caja.total_egresos))}
                   bold
                 />
               </div>
@@ -692,7 +843,7 @@ export function Caja() {
             </label>
             {montoReal !== '' && !isNaN(parseFloat(montoReal)) && (
               <DifCard
-                esperado={toNum(caja.monto_inicial) + toNum(caja.total_efectivo)}
+                esperado={toNum(caja.monto_inicial) + toNum(caja.total_efectivo) - toNum(caja.total_egresos)}
                 real={parseFloat(montoReal)}
               />
             )}
@@ -735,6 +886,9 @@ export function Caja() {
             <div className="rounded-xl bg-ink-50 p-4 text-sm space-y-1.5">
               <InfoRow k="Fondo inicial"      v={money(resumen.monto_inicial)} />
               <InfoRow k="Ventas efectivo"    v={money(resumen.total_efectivo)} />
+              {resumen.total_egresos > 0 && (
+                <InfoRow k="Salidas de caja" v={`- ${money(resumen.total_egresos)}`} />
+              )}
               <div className="border-t border-ink-200 pt-1.5">
                 <InfoRow k="Efectivo esperado" v={money(resumen.esperado_efectivo)} bold />
               </div>

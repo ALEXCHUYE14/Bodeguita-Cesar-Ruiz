@@ -14,6 +14,7 @@ import { Caja } from '@/pages/Caja'
 import { Proveedores } from '@/pages/Proveedores'
 import { Compras } from '@/pages/Compras'
 import { Mermas } from '@/pages/Mermas'
+import { Egresos } from '@/pages/Egresos'
 import { Rentabilidad } from '@/pages/Rentabilidad'
 import { Configuracion } from '@/pages/Configuracion'
 import { tieneAcceso } from '@/utils/roles'
@@ -150,6 +151,17 @@ function Rutas() {
           <Privado>
             <SoloRol minRol="supervisor">
               <Mermas />
+            </SoloRol>
+          </Privado>
+        }
+      />
+
+      <Route
+        path="/egresos"
+        element={
+          <Privado>
+            <SoloRol minRol="supervisor">
+              <Egresos />
             </SoloRol>
           </Privado>
         }
