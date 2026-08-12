@@ -70,7 +70,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <nav className="flex-1 space-y-0.5 px-3 py-2">
+        {/* min-h-0 es necesario junto a flex-1 para que el nav pueda scrollear
+            en vez de empujar la tarjeta de usuario/cerrar sesion fuera de la
+            pantalla cuando hay mas secciones de las que caben verticalmente. */}
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
           {items.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
