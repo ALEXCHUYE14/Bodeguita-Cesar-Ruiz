@@ -24,8 +24,10 @@ import {
   ETIQUETA_PAGO,
   ymd,
   cx,
+  cantidad,
 } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
+import { imprimirTicket, type LineaTicket } from '@/utils/imprimirTicket'
 import type { DetalleVenta, MetodoPago, Perfil, Venta } from '@/types/database'
 
 // ── Rangos de fecha alineados a calendario (semana/quincena/mes) ─────────────
@@ -621,6 +623,20 @@ export function Ventas() {
 }
 
 /* ─── Reimpresion de ticket desde historial ───────────────────────────────── */
+
+// A diferencia del ticket recien cobrado (Receipt.tsx), aqui solo tenemos el
+// registro historico "aplanado" (detalle_ventas), sin el producto completo —
+// por eso no se puede mostrar "0.750 kg" con certeza (no sabemos la unidad de
+// medida), pero si se distingue caja/saco.
+function lineaDesdeDetalle(d: DetalleVenta): LineaTicket {
+  return {
+    etiquetaCantidad: `${cantidad(d.cantidad)}x`,
+    nombre: d.producto_nombre,
+    etiquetaModalidad: d.modalidad === 'caja' ? 'Caja' : d.modalidad === 'saco' ? 'Saco' : undefined,
+    monto: Number(d.subtotal),
+  }
+}
+
 function TicketReprint({
   venta,
   esAdmin,
@@ -667,6 +683,25 @@ function TicketReprint({
     onAnulada()
   }
 
+  function imprimir() {
+    if (!venta) return
+    imprimirTicket({
+      numero: venta.numero,
+      fecha: venta.creado_en,
+      cajero: venta.cajero_nombre,
+      lineas: detalle.map(lineaDesdeDetalle),
+      subtotal: venta.subtotal,
+      descuento: venta.descuento,
+      igv: venta.igv,
+      total: venta.total,
+      metodoPagoEtiqueta: ETIQUETA_PAGO[venta.metodo] ?? venta.metodo,
+      pagoRecibido: venta.pago_recibido,
+      vuelto: venta.metodo === 'efectivo' ? venta.vuelto : 0,
+      clienteNombre: venta.cliente_nombre,
+      anulada: venta.anulada,
+    })
+  }
+
   if (!venta) return null
 
   return (
@@ -684,7 +719,7 @@ function TicketReprint({
           <Button
             variant="outline"
             className="flex-1"
-            onClick={() => window.print()}
+            onClick={imprimir}
             disabled={cargando}
           >
             <Printer className="size-4" /> Imprimir
@@ -703,7 +738,6 @@ function TicketReprint({
       </div>
 
       <div
-        id="ticket-imprimible"
         className="rounded-xl border border-dashed border-ink-200 p-4 font-sans text-sm"
       >
         <div className="mb-3 text-center">
@@ -722,7 +756,12 @@ function TicketReprint({
             {detalle.map((d) => (
               <div key={d.id} className="flex justify-between gap-2">
                 <span className="min-w-0 truncate text-ink-700">
-                  {d.cantidad}x {d.producto_nombre}
+                  {cantidad(d.cantidad)}x {d.producto_nombre}
+                  {(d.modalidad === 'caja' || d.modalidad === 'saco') && (
+                    <span className="ml-1 rounded bg-accent-100 px-1 py-0.5 text-[0.6rem] font-bold uppercase text-accent-700">
+                      {d.modalidad === 'caja' ? 'Caja' : 'Saco'}
+                    </span>
+                  )}
                 </span>
                 <span className="tabular shrink-0 text-ink-900">{money(Number(d.subtotal))}</span>
               </div>

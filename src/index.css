@@ -63,30 +63,11 @@ body {
   background-size: 22px 22px;
 }
 
-/* Impresion de ticket: aisla #ticket-imprimible y oculta el resto */
-@media print {
-  body * {
-    visibility: hidden;
-  }
-  #ticket-imprimible,
-  #ticket-imprimible * {
-    visibility: visible;
-  }
-  #ticket-imprimible {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    margin: 0 auto;
-    width: 80mm;
-    max-width: 80mm;
-    border: none !important;
-    padding: 4mm 3mm;
-    color: #000;
-    font-size: 12px;
-  }
-}
-
+/* Los tickets de venta se imprimen en una ventana aparte y autocontenida
+   (ver src/utils/imprimirTicket.ts), no imprimiendo esta pagina directamente
+   — así el resultado es siempre nítido y no depende del CSS de la app. Este
+   @page queda solo como respaldo por si el navegador bloquea esa ventana y
+   el sistema cae al window.print() de esta página. */
 @page {
   size: 80mm auto;
   margin: 0;
