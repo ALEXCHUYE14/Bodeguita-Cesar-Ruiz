@@ -243,11 +243,36 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
     w.document.write(html)
     w.document.close()
     w.focus()
-    // Cierra la ventana del reporte cuando el usuario termina con el dialogo
-    // de impresion (no antes: cerrarla justo tras llamar a print() deja la
-    // vista previa en blanco, porque el navegador aun esta renderizando).
-    w.addEventListener('afterprint', () => w.close())
-    setTimeout(() => { w.print() }, 600)
+
+    // Cierra la ventana del reporte cuando el navegador termina con el
+    // dialogo de impresion, con un margen extra despues de "afterprint":
+    // en Chrome para Android ese evento se dispara apenas se ABRE el
+    // dialogo del sistema (no cuando el usuario termina), asi que cerrar
+    // de inmediato interrumpe al sistema operativo a medio capturar el
+    // contenido para el PDF y termina mostrando "Se produjo un error al
+    // imprimir la pagina". El margen le da tiempo a terminar esa captura.
+    let cerrada = false
+    const cerrarConMargen = () => {
+      if (cerrada) return
+      cerrada = true
+      setTimeout(() => w.close(), 1500)
+    }
+    w.addEventListener('afterprint', cerrarConMargen)
+    // Respaldo por si el navegador no dispara "afterprint" en absoluto.
+    setTimeout(cerrarConMargen, 60000)
+
+    // Espera a que el logo termine de cargar (o falle) antes de imprimir:
+    // lanzar print() con una imagen todavia descargandose puede dejar el
+    // reporte a medio renderizar en navegadores moviles.
+    const logoImg = w.document.querySelector('img.logo') as HTMLImageElement | null
+    await new Promise<void>((resolve) => {
+      if (!logoImg || logoImg.complete) { resolve(); return }
+      logoImg.addEventListener('load', () => resolve(), { once: true })
+      logoImg.addEventListener('error', () => resolve(), { once: true })
+      setTimeout(resolve, 2000) // por si el navegador no dispara load ni error
+    })
+
+    setTimeout(() => { w.print() }, 400)
   } catch (err) {
     w.close()
     throw err
