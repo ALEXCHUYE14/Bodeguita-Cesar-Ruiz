@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { inicioDelDia } from '@/utils/format'
 import type { CajaRegistro } from '@/types/database'
 
 export interface ResumenCierre {
@@ -95,7 +96,7 @@ export function useCaja(cajeroId: string | null) {
     cargarHistorial()
   }, [cargar, cargarHistorial])
 
-  async function abrir(montoInicial: number, cajeroNombre: string): Promise<CajaRegistro> {
+  async function abrir(montoInicial: number, cajeroNombre: string): Promise<{ caja: CajaRegistro; ventasAdoptadas: number }> {
     const { data, error } = await supabase
       .from('cajas')
       .insert({
@@ -110,10 +111,59 @@ export function useCaja(cajeroId: string | null) {
       .select()
       .single()
     if (error) throw error
-    localStorage.setItem(CAJA_KEY, data.id)
-    setCaja(data)
-    setHistorial((prev) => [data, ...prev])
-    return data
+
+    let cajaFinal: CajaRegistro = data
+    let ventasAdoptadas = 0
+
+    // Adopta ventas de HOY que quedaron sin caja asignada (caja_id null) —
+    // pasa si alguien vendio sin haber aperturado caja antes. Se vinculan a
+    // esta caja recien abierta para que el cuadre y el cierre las incluyan.
+    // Solo un administrador puede reasignar "caja_id" en ventas (politica
+    // RLS ventas_update); si el usuario no es admin este bloque no
+    // encuentra permiso, no cambia nada, y no debe impedir abrir la caja.
+    try {
+      const { data: huerfanas } = await supabase
+        .from('ventas')
+        .select('id, metodo, total')
+        .is('caja_id', null)
+        .eq('anulada', false)
+        .gte('creado_en', inicioDelDia().toISOString())
+
+      if (huerfanas && huerfanas.length > 0) {
+        const ids = huerfanas.map((v) => v.id)
+        const { error: errorAdopcion } = await supabase
+          .from('ventas')
+          .update({ caja_id: data.id })
+          .in('id', ids)
+
+        if (!errorAdopcion) {
+          ventasAdoptadas = huerfanas.length
+          const sumaPorMetodo = (m: string) =>
+            huerfanas.filter((v) => v.metodo === m).reduce((s, v) => s + toNum(v.total), 0)
+
+          const { data: cajaActualizada, error: errorTotales } = await supabase
+            .from('cajas')
+            .update({
+              total_efectivo: sumaPorMetodo('efectivo'),
+              total_yape:     sumaPorMetodo('yape'),
+              total_fiado:    sumaPorMetodo('fiado'),
+            })
+            .eq('id', data.id)
+            .select()
+            .single()
+
+          if (!errorTotales && cajaActualizada) cajaFinal = cajaActualizada
+        }
+      }
+    } catch {
+      // La adopcion de ventas huerfanas es una mejora "best effort": si falla
+      // por lo que sea, la caja igual queda abierta con normalidad.
+    }
+
+    localStorage.setItem(CAJA_KEY, cajaFinal.id)
+    setCaja(cajaFinal)
+    setHistorial((prev) => [cajaFinal, ...prev])
+    return { caja: cajaFinal, ventasAdoptadas }
   }
 
   async function cerrar(montoReal: number): Promise<ResumenCierre> {

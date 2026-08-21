@@ -359,8 +359,12 @@ export function Caja() {
     }
     setProcesando(true)
     try {
-      await abrir(monto)
-      toast.exito('Caja abierta correctamente')
+      const { ventasAdoptadas } = await abrir(monto)
+      toast.exito(
+        ventasAdoptadas > 0
+          ? `Caja abierta. Se vincularon ${ventasAdoptadas} venta(s) de hoy registradas sin caja abierta.`
+          : 'Caja abierta correctamente',
+      )
       setAbrirOpen(false)
       setMontoInicial('')
     } catch (e) {
