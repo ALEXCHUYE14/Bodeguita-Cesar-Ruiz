@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Wallet, TrendingDown, Filter, X } from 'lucide-react'
 import { useEgresos, ETIQUETA_CATEGORIA_EGRESO, ETIQUETA_METODO_EGRESO } from '@/hooks/useEgresos'
 import { useAuth } from '@/context/AuthContext'
+import { useCajaCtx } from '@/context/CajaContext'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -28,6 +29,7 @@ function finHoy(): Date {
 
 export function Egresos() {
   const { esAdmin } = useAuth()
+  const { caja } = useCajaCtx()
   const toast = useToast()
 
   // useRef: evita recrear estas fechas (y por lo tanto recargar en bucle) en cada render
@@ -85,9 +87,17 @@ export function Egresos() {
         categoria: f.categoria,
         monto,
         metodo: f.metodo,
+        // Si hay una caja abierta, todo egreso queda vinculado a ella (no solo
+        // los registrados desde "Salida de caja"), para que el efectivo
+        // esperado del cierre siempre refleje la realidad del turno.
+        caja_id: caja?.id ?? null,
         notas: f.notas.trim() || null,
       })
-      toast.exito('Egreso registrado')
+      toast.exito(
+        caja?.id && f.metodo === 'efectivo'
+          ? 'Egreso registrado y descontado de la caja activa'
+          : 'Egreso registrado',
+      )
       setFormOpen(false)
       resetForm()
     } catch (e) {
@@ -359,11 +369,15 @@ export function Egresos() {
               placeholder="Detalle adicional..."
             />
           </Campo>
-          <p className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-400">
-            Para registrar una salida de dinero desde una caja abierta (gasto menor durante el
-            turno), usa el boton <b className="text-ink-600">Salida de caja</b> dentro de{' '}
-            <b className="text-ink-600">Caja</b> — asi se descuenta automaticamente del efectivo
-            esperado al cerrar.
+          <p
+            className={cx(
+              'rounded-lg px-3 py-2 text-xs',
+              caja ? 'bg-accent-50 text-accent-700' : 'bg-ink-50 text-ink-400',
+            )}
+          >
+            {caja
+              ? 'Hay una caja abierta: este egreso se vinculará a ese turno y, si se paga en efectivo, se descontará del efectivo esperado al cerrar.'
+              : 'No hay caja abierta ahora mismo: este egreso quedará registrado, pero no se descontará de ningún cuadre de caja.'}
           </p>
         </div>
       </Sheet>

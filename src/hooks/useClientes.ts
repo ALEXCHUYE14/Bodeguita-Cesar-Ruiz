@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { ClienteCredito, PagoCredito } from '@/types/database'
+import type { ClienteCredito, MetodoAbono, PagoCredito } from '@/types/database'
 
 // Dias sin ningun pago ni nueva venta al fiado a partir de los cuales se
 // considera "vencida" la deuda de un cliente (usado para alertas).
@@ -114,11 +114,15 @@ export function useClientes() {
     clienteId: string,
     monto: number,
     nota: string | null,
+    metodo: MetodoAbono = 'efectivo',
+    cajaId: string | null = null,
   ): Promise<PagoCredito> {
     const { data, error } = await supabase.rpc('registrar_abono_cliente', {
       p_cliente_id: clienteId,
       p_monto: monto,
       p_nota: nota,
+      p_metodo: metodo,
+      p_caja_id: cajaId,
     })
     if (error) throw error
     // Refrescar el cliente afectado

@@ -15,19 +15,23 @@ import {
 } from 'lucide-react'
 import { useClientes, DIAS_DEUDA_VENCIDA } from '@/hooks/useClientes'
 import { useAuth } from '@/context/AuthContext'
+import { useCajaCtx } from '@/context/CajaContext'
+import { ETIQUETA_METODO_EGRESO } from '@/hooks/useEgresos'
 import { BRAND } from '@/config/brand'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { money, fechaHora, cx } from '@/utils/format'
-import type { ClienteCredito, PagoCredito } from '@/types/database'
+import type { ClienteCredito, MetodoAbono, PagoCredito } from '@/types/database'
 
 const VACIO = { nombre: '', telefono: '', direccion: '', limite_credito: '100' }
+const METODOS_ABONO: MetodoAbono[] = ['efectivo', 'yape', 'transferencia', 'tarjeta']
 
 export function Clientes() {
   const { clientes, diasSinPago, cargando, crear, actualizar, eliminar, registrarAbono, obtenerPagos } =
     useClientes()
   const { esAdmin } = useAuth()
+  const { caja, sumarCobro } = useCajaCtx()
   const toast = useToast()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -40,6 +44,7 @@ export function Clientes() {
   const [whatsappCliente, setWhatsappCliente] = useState<ClienteCredito | null>(null)
   const [f, setF] = useState(VACIO)
   const [montoAbono, setMontoAbono] = useState('')
+  const [metodoAbono, setMetodoAbono] = useState<MetodoAbono>('efectivo')
   const [notaAbono, setNotaAbono] = useState('')
 
   const totalDeuda = useMemo(
@@ -118,10 +123,18 @@ export function Clientes() {
     }
     setGuardando(true)
     try {
-      await registrarAbono(abonoCliente.id, monto, notaAbono.trim() || null)
-      toast.exito(`Abono de ${money(monto)} registrado`)
+      await registrarAbono(abonoCliente.id, monto, notaAbono.trim() || null, metodoAbono, caja?.id ?? null)
+      // Refleja el ingreso al instante en el estado de caja compartido (si hay
+      // una caja abierta), sin esperar a que se recargue en otra pantalla.
+      if (caja?.id) sumarCobro(caja.id, metodoAbono, monto)
+      toast.exito(
+        caja?.id
+          ? `Abono de ${money(monto)} registrado y sumado a la caja activa`
+          : `Abono de ${money(monto)} registrado (sin caja abierta: no se sumo a ningun cuadre todavia)`,
+      )
       setAbonoCliente(null)
       setMontoAbono('')
+      setMetodoAbono('efectivo')
       setNotaAbono('')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error al registrar abono')
@@ -311,7 +324,7 @@ export function Clientes() {
                       </IconBtn>
                     )}
                     {esAdmin && c.deuda_actual > 0 && (
-                      <IconBtn title="Registrar abono" onClick={() => { setAbonoCliente(c); setMontoAbono(''); setNotaAbono('') }}>
+                      <IconBtn title="Registrar abono" onClick={() => { setAbonoCliente(c); setMontoAbono(''); setMetodoAbono('efectivo'); setNotaAbono('') }}>
                         <ArrowDownLeft className="size-4" />
                       </IconBtn>
                     )}
@@ -350,7 +363,7 @@ export function Clientes() {
                       )}
                       {esAdmin && c.deuda_actual > 0 && (
                         <button
-                          onClick={() => { setAbonoCliente(c); setMontoAbono(''); setNotaAbono('') }}
+                          onClick={() => { setAbonoCliente(c); setMontoAbono(''); setMetodoAbono('efectivo'); setNotaAbono('') }}
                           className="flex items-center gap-1 rounded-lg bg-accent-50 px-2.5 py-1.5 text-xs font-semibold text-accent-700"
                         >
                           <ArrowDownLeft className="size-3.5" /> Abonar
@@ -500,6 +513,27 @@ export function Clientes() {
                   </button>
                 ))}
             </div>
+            <Campo label="Método de pago del abono *">
+              <select
+                className="input"
+                value={metodoAbono}
+                onChange={(e) => setMetodoAbono(e.target.value as MetodoAbono)}
+              >
+                {METODOS_ABONO.map((m) => (
+                  <option key={m} value={m}>{ETIQUETA_METODO_EGRESO[m]}</option>
+                ))}
+              </select>
+            </Campo>
+            <div
+              className={cx(
+                'rounded-xl px-3.5 py-2.5 text-xs',
+                caja ? 'bg-accent-50 text-accent-700' : 'bg-amber-50 text-amber-700',
+              )}
+            >
+              {caja
+                ? 'Se sumará como ingreso por cobranza a la caja abierta ahora mismo.'
+                : 'No hay caja abierta: el abono quedará registrado, pero no sumará a ningún cuadre hasta que se abra una caja (se vinculará automáticamente si es hoy).'}
+            </div>
             <Campo label="Nota (opcional)">
               <input
                 className="input"
@@ -530,7 +564,10 @@ export function Clientes() {
               >
                 <div>
                   {p.nota && <p className="text-sm font-semibold text-ink-800">{p.nota}</p>}
-                  <p className="text-xs text-ink-400">{fechaHora(p.creado_en)}</p>
+                  <p className="text-xs text-ink-400">
+                    {fechaHora(p.creado_en)} · {ETIQUETA_METODO_EGRESO[p.metodo]}
+                    {!p.caja_id && ' · sin caja'}
+                  </p>
                 </div>
                 <span className="tabular font-display text-sm font-bold text-accent-700">
                   + {money(p.monto)}

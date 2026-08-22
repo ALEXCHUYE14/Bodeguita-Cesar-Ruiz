@@ -12,9 +12,10 @@ interface CajaState {
   caja: CajaRegistro | null
   historial: CajaRegistro[]
   cargando: boolean
-  abrir: (montoInicial: number) => Promise<{ caja: CajaRegistro; ventasAdoptadas: number }>
+  abrir: (montoInicial: number) => Promise<{ caja: CajaRegistro; ventasAdoptadas: number; cobrosAdoptados: number }>
   cerrar: (montoReal: number) => Promise<ResumenCierre>
   sumarVenta: (cajaId: string, metodo: 'efectivo' | 'yape' | 'fiado', monto: number) => Promise<void>
+  sumarCobro: (cajaId: string, metodo: 'efectivo' | 'yape' | 'transferencia' | 'tarjeta', monto: number) => void
   total: number
   recargar: () => void
   recargarHistorial: () => void
@@ -34,12 +35,13 @@ export function CajaProvider({ children }: { children: ReactNode }) {
     abrir: abrirHook,
     cerrar,
     sumarVenta,
+    sumarCobro,
     total,
     recargar,
     recargarHistorial,
   } = useCaja(cajeroId)
 
-  async function abrir(montoInicial: number): Promise<{ caja: CajaRegistro; ventasAdoptadas: number }> {
+  async function abrir(montoInicial: number): Promise<{ caja: CajaRegistro; ventasAdoptadas: number; cobrosAdoptados: number }> {
     const nombre = perfil?.rol === 'administrador'
       ? BRAND.operador
       : (perfil?.nombre?.split(' ')[0] ?? 'Cajero')
@@ -54,6 +56,7 @@ export function CajaProvider({ children }: { children: ReactNode }) {
     abrir,
     cerrar,
     sumarVenta,
+    sumarCobro,
     total,
     recargar,
     recargarHistorial,

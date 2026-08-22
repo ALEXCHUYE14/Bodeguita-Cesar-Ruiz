@@ -14,6 +14,7 @@ import {
   Trash2,
   X,
   ArrowUpFromLine,
+  ArrowDownToLine,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useCajaCtx } from '@/context/CajaContext'
@@ -32,6 +33,20 @@ const RAPIDOS_INICIAL = [50, 100, 150, 200, 300, 500]
 // Conversión numérica segura — Supabase puede devolver NUMERIC como string
 const toNum = (v: unknown): number => Number(v ?? 0)
 
+// Efectivo esperado en caja = Fondo inicial + Ventas directas en efectivo +
+// Cobros de deuda en efectivo - Egresos en efectivo. Yape/transferencia/
+// tarjeta no son billetes físicos: no entran al arqueo de caja, solo se
+// reportan aparte. Centralizado aquí para que el Sheet de cierre, el
+// historial y el resumen post-cierre usen siempre la misma fórmula.
+function esperadoEfectivoCaja(c: CajaRegistro): number {
+  return (
+    toNum(c.monto_inicial) +
+    toNum(c.total_efectivo) +
+    toNum(c.total_cobros_efectivo) -
+    toNum(c.total_egresos)
+  )
+}
+
 // ─── Generador de reporte PDF de cierre de caja ───────────────────────────────
 
 async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: number): Promise<void> {
@@ -47,7 +62,11 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
   )
 
   try {
-    const [{ data: ventasData, error }, { data: egresosData, error: errorEgresos }] = await Promise.all([
+    const [
+      { data: ventasData, error },
+      { data: egresosData, error: errorEgresos },
+      { data: cobrosData, error: errorCobros },
+    ] = await Promise.all([
       supabase
         .from('ventas')
         .select('*')
@@ -58,15 +77,36 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
         .select('*')
         .eq('caja_id', cajaData.id)
         .order('creado_en', { ascending: true }),
+      supabase
+        .from('pagos_credito')
+        .select('*')
+        .eq('caja_id', cajaData.id)
+        .order('creado_en', { ascending: true }),
     ])
 
     if (error) throw error
     if (errorEgresos) throw errorEgresos
+    if (errorCobros) throw errorCobros
 
     const ventas = ventasData ?? []
     const ventasValidas  = ventas.filter((v) => !v.anulada)
     const ventasAnuladas = ventas.filter((v) => v.anulada)
     const egresos = egresosData ?? []
+    const cobros  = cobrosData ?? []
+
+    // El tipo Database de este proyecto no declara relaciones ("Relationships:
+    // []"), asi que no se puede pedir "clientes_credito(nombre)" embebido:
+    // se consulta aparte y se arma un mapa id->nombre para el reporte,
+    // siguiendo el mismo patron que useClientes.ts.
+    const nombresClientes = new Map<string, string>()
+    if (cobros.length > 0) {
+      const clienteIds = [...new Set(cobros.map((p) => p.cliente_id))]
+      const { data: clientesData } = await supabase
+        .from('clientes_credito')
+        .select('id, nombre')
+        .in('id', clienteIds)
+      ;(clientesData ?? []).forEach((c) => nombresClientes.set(c.id, c.nombre))
+    }
 
     // toNum() antes de reduce previene concatenación si Supabase devolvió strings
     const totalEfectivo = ventasValidas.filter((v) => v.metodo === 'efectivo').reduce((s, v) => s + toNum(v.total), 0)
@@ -78,9 +118,21 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       .filter((e) => e.metodo === 'efectivo')
       .reduce((s, e) => s + toNum(e.monto), 0)
 
+    // Cobranzas (abonos de clientes): efectivo suma al arqueo fisico, el
+    // resto (yape/transferencia/tarjeta) es solo informativo en el reporte.
+    const totalCobrosEfectivo = cobros.filter((p) => p.metodo === 'efectivo').reduce((s, p) => s + toNum(p.monto), 0)
+    const totalCobrosYape     = cobros.filter((p) => p.metodo === 'yape').reduce((s, p) => s + toNum(p.monto), 0)
+    const totalCobrosOtros    = cobros
+      .filter((p) => p.metodo === 'transferencia' || p.metodo === 'tarjeta')
+      .reduce((s, p) => s + toNum(p.monto), 0)
+    const totalCobros = totalCobrosEfectivo + totalCobrosYape + totalCobrosOtros
+
     const montoInicial      = toNum(cajaData.monto_inicial)
     const totalEfectivoCaja = toNum(cajaData.total_efectivo)
-    const esperadoEfectivo  = montoInicial + totalEfectivoCaja - totalEgresosEfectivo
+    // Total en Caja = (Fondo Inicial + Ventas Directas en efectivo + Cobros
+    // de deuda en efectivo) - Egresos en efectivo. Yape/otros no son
+    // billetes fisicos: no entran al arqueo, solo se reportan aparte.
+    const esperadoEfectivo  = montoInicial + totalEfectivoCaja + totalCobrosEfectivo - totalEgresosEfectivo
     const diferencia        = toNum(montoRealContado) - esperadoEfectivo
 
     const diferenciaColor = diferencia >= 0 ? '#065f46' : '#991b1b'
@@ -127,6 +179,31 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       <thead><tr><th class="center">Hora</th><th>Concepto</th><th class="center">Método</th><th class="right">Monto</th></tr></thead>
       <tbody>${filasEgresos}</tbody>
       <tfoot><tr><td colspan="3"><b>TOTAL SALIDAS (${egresos.length})</b></td><td class="right">${money(totalEgresos)}</td></tr></tfoot>
+    </table>
+  </div>`
+        : ''
+
+    const filasCobros = cobros
+      .map(
+        (p) => `
+          <tr>
+            <td class="center">${horaCorta(p.creado_en)}</td>
+            <td>${nombresClientes.get(p.cliente_id) ?? '—'}${p.nota ? ` <span style="color:#aaa;">· ${p.nota}</span>` : ''}</td>
+            <td class="center"><span class="badge badge-${p.metodo === 'efectivo' ? 'efectivo' : p.metodo === 'yape' ? 'yape' : 'fiado'}">${p.metodo}</span></td>
+            <td class="right money">${money(toNum(p.monto))}</td>
+          </tr>`,
+      )
+      .join('')
+
+    const seccionCobros =
+      cobros.length > 0
+        ? `
+  <div class="section">
+    <div class="section-title">Ingresos por Cobranza / Pago de Deuda</div>
+    <table>
+      <thead><tr><th class="center">Hora</th><th>Cliente</th><th class="center">Método</th><th class="right">Monto</th></tr></thead>
+      <tbody>${filasCobros}</tbody>
+      <tfoot><tr><td colspan="3"><b>TOTAL COBRANZAS (${cobros.length})</b></td><td class="right">${money(totalCobros)}</td></tr></tfoot>
     </table>
   </div>`
         : ''
@@ -220,18 +297,25 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       <tbody>${filasVentas}</tbody>
       ${ventasValidas.length > 0 ? `<tfoot><tr><td colspan="4"><b>TOTAL VENDIDO (${ventasValidas.length} ventas válidas)</b></td><td class="right">${money(totalGeneral)}</td></tr></tfoot>` : ''}
     </table>
-  </div>${seccionEgresos}
+  </div>${seccionEgresos}${seccionCobros}
   <div class="section">
     <div class="section-title">Resumen Financiero del Día</div>
-    <div class="summary-grid">
-      <div class="summary-card efectivo"><div class="summary-label">Efectivo</div><div class="summary-value">${money(totalEfectivo)}</div></div>
-      <div class="summary-card yape"><div class="summary-label">Yape</div><div class="summary-value">${money(totalYape)}</div></div>
-      <div class="summary-card fiado"><div class="summary-label">Fiado</div><div class="summary-value">${money(totalFiado)}</div></div>
+    <div class="summary-grid" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+      <div class="summary-card efectivo"><div class="summary-label">Ventas efectivo</div><div class="summary-value">${money(totalEfectivo)}</div></div>
+      <div class="summary-card yape"><div class="summary-label">Ventas Yape</div><div class="summary-value">${money(totalYape)}</div></div>
+      <div class="summary-card fiado"><div class="summary-label">Ventas fiado</div><div class="summary-value">${money(totalFiado)}</div></div>
+      <div class="summary-card" style="background:#eef2ff;border-color:#c7d2fe;"><div class="summary-label" style="color:#4338ca;">Cobranzas</div><div class="summary-value" style="color:#4338ca;">${money(totalCobros)}</div></div>
     </div>
-    <div class="total-card"><span class="total-label">TOTAL VENDIDO (Efectivo + Yape + Fiado)</span><span class="total-value">${money(totalGeneral)}</span></div>
-    ${totalEgresos > 0 ? `<div class="total-card" style="background:#7f1d1d;"><span class="total-label">SALIDAS DE CAJA (todas)</span><span class="total-value">- ${money(totalEgresos)}</span></div>` : ''}
+    <div class="total-card"><span class="total-label">TOTAL VENTAS AL CONTADO (Efectivo + Yape)</span><span class="total-value">${money(totalEfectivo + totalYape)}</span></div>
+    <div class="total-card" style="background:#92400e;"><span class="total-label">TOTAL VENTAS FIADAS (no ingresa a caja fisica)</span><span class="total-value">${money(totalFiado)}</span></div>
+    <div class="total-card" style="background:#4338ca;"><span class="total-label">TOTAL COBRANZAS / PAGOS DE CLIENTES</span><span class="total-value">${money(totalCobros)}</span></div>
+    ${totalEgresos > 0 ? `<div class="total-card" style="background:#7f1d1d;"><span class="total-label">TOTAL EGRESOS / GASTOS DEL DIA</span><span class="total-value">- ${money(totalEgresos)}</span></div>` : ''}
+    <div class="total-card" style="background:#065f46;"><span class="total-label">BALANCE FINAL NETO (Ventas contado + Cobranzas − Egresos)</span><span class="total-value">${money(totalEfectivo + totalYape + totalCobros - totalEgresos)}</span></div>
     <div class="balance-card">
-      <div class="balance-desc">Efectivo esperado: <b>${money(esperadoEfectivo)}</b> &nbsp;·&nbsp; Contado: <b>${money(toNum(montoRealContado))}</b> &nbsp;·&nbsp; <b>${diferencia >= 0 ? 'Sobrante' : 'Faltante'}</b></div>
+      <div class="balance-desc">
+        Efectivo esperado (Fondo + Ventas efectivo + Cobros efectivo − Egresos efectivo): <b>${money(esperadoEfectivo)}</b>
+        &nbsp;·&nbsp; Contado: <b>${money(toNum(montoRealContado))}</b> &nbsp;·&nbsp; <b>${diferencia >= 0 ? 'Sobrante' : 'Faltante'}</b>
+      </div>
       <div class="balance-value">${diferencia >= 0 ? '+' : ''}${money(diferencia)}</div>
     </div>
   </div>
@@ -359,10 +443,13 @@ export function Caja() {
     }
     setProcesando(true)
     try {
-      const { ventasAdoptadas } = await abrir(monto)
+      const { ventasAdoptadas, cobrosAdoptados } = await abrir(monto)
+      const partes: string[] = []
+      if (ventasAdoptadas > 0) partes.push(`${ventasAdoptadas} venta(s)`)
+      if (cobrosAdoptados > 0) partes.push(`${cobrosAdoptados} cobro(s) de deuda`)
       toast.exito(
-        ventasAdoptadas > 0
-          ? `Caja abierta. Se vincularon ${ventasAdoptadas} venta(s) de hoy registradas sin caja abierta.`
+        partes.length > 0
+          ? `Caja abierta. Se vincularon ${partes.join(' y ')} de hoy registrados sin caja abierta.`
           : 'Caja abierta correctamente',
       )
       setAbrirOpen(false)
@@ -565,6 +652,16 @@ export function Caja() {
             color="text-amber-700"
             bg="bg-amber-50"
           />
+          {(toNum(caja.total_cobros_efectivo) + toNum(caja.total_cobros_yape) + toNum(caja.total_cobros_otros)) > 0 && (
+            <KpiCaja
+              icon={ArrowDownToLine}
+              label="Cobros de deudas"
+              valor={money(toNum(caja.total_cobros_efectivo) + toNum(caja.total_cobros_yape) + toNum(caja.total_cobros_otros))}
+              color="text-indigo-700"
+              bg="bg-indigo-50"
+              className="col-span-2 lg:col-span-1"
+            />
+          )}
           {toNum(caja.total_egresos) > 0 && (
             <KpiCaja
               icon={ArrowUpFromLine}
@@ -638,9 +735,9 @@ export function Caja() {
                 const hMonto    = toNum(h.monto_inicial)
                 const hEfectivo = toNum(h.total_efectivo)
                 const hYape     = toNum(h.total_yape)
-                const hEgresos  = toNum(h.total_egresos)
+                const hCobros   = toNum(h.total_cobros_efectivo) + toNum(h.total_cobros_yape) + toNum(h.total_cobros_otros)
                 const hReal     = toNum(h.monto_real)
-                const esperado  = hMonto + hEfectivo - hEgresos
+                const esperado  = esperadoEfectivoCaja(h)
 
                 return (
                   <li key={h.id} className="flex items-center justify-between px-4 py-3">
@@ -670,7 +767,7 @@ export function Caja() {
                     <div className="flex items-center gap-2">
                       <div className="text-right">
                         <p className="tabular text-sm font-bold text-ink-900">
-                          {money(hMonto + hEfectivo + hYape)}
+                          {money(hMonto + hEfectivo + hYape + hCobros)}
                         </p>
                         <div className="mt-0.5">
                           {h.estado === 'abierta' ? (
@@ -842,20 +939,25 @@ export function Caja() {
               </span>
             </div>
             <div className="rounded-xl bg-ink-50 p-4 text-sm space-y-1.5">
-              <InfoRow k="Fondo inicial"    v={money(toNum(caja.monto_inicial))} />
-              <InfoRow k="Ventas efectivo"  v={money(toNum(caja.total_efectivo))} />
+              <InfoRow k="Fondo inicial"      v={money(toNum(caja.monto_inicial))} />
+              <InfoRow k="Ventas efectivo"    v={money(toNum(caja.total_efectivo))} />
+              {toNum(caja.total_cobros_efectivo) > 0 && (
+                <InfoRow k="Cobros de deuda (efectivo)" v={money(toNum(caja.total_cobros_efectivo))} />
+              )}
               {toNum(caja.total_egresos) > 0 && (
                 <InfoRow k="Salidas de caja" v={`- ${money(toNum(caja.total_egresos))}`} />
               )}
               <div className="border-t border-ink-200 pt-1.5">
-                <InfoRow
-                  k="Efectivo esperado"
-                  v={money(toNum(caja.monto_inicial) + toNum(caja.total_efectivo) - toNum(caja.total_egresos))}
-                  bold
-                />
+                <InfoRow k="Efectivo esperado" v={money(esperadoEfectivoCaja(caja))} bold />
               </div>
               <InfoRow k="Ventas Yape"  v={money(toNum(caja.total_yape))} />
               <InfoRow k="Ventas Fiado" v={money(toNum(caja.total_fiado))} />
+              {(toNum(caja.total_cobros_yape) + toNum(caja.total_cobros_otros)) > 0 && (
+                <InfoRow
+                  k="Cobros de deuda (Yape/otros)"
+                  v={money(toNum(caja.total_cobros_yape) + toNum(caja.total_cobros_otros))}
+                />
+              )}
             </div>
             <label className="block">
               <span className="label mb-1.5 block">¿Cuánto efectivo hay en caja? (S/)</span>
@@ -872,7 +974,7 @@ export function Caja() {
             </label>
             {montoReal !== '' && !isNaN(parseFloat(montoReal)) && (
               <DifCard
-                esperado={toNum(caja.monto_inicial) + toNum(caja.total_efectivo) - toNum(caja.total_egresos)}
+                esperado={esperadoEfectivoCaja(caja)}
                 real={parseFloat(montoReal)}
               />
             )}
@@ -915,6 +1017,9 @@ export function Caja() {
             <div className="rounded-xl bg-ink-50 p-4 text-sm space-y-1.5">
               <InfoRow k="Fondo inicial"      v={money(resumen.monto_inicial)} />
               <InfoRow k="Ventas efectivo"    v={money(resumen.total_efectivo)} />
+              {resumen.total_cobros_efectivo > 0 && (
+                <InfoRow k="Cobros de deuda (efectivo)" v={money(resumen.total_cobros_efectivo)} />
+              )}
               {resumen.total_egresos > 0 && (
                 <InfoRow k="Salidas de caja" v={`- ${money(resumen.total_egresos)}`} />
               )}
@@ -924,6 +1029,12 @@ export function Caja() {
               <InfoRow k="Efectivo contado" v={money(resumen.ingresado_real)} bold />
               <InfoRow k="Ventas Yape"      v={money(resumen.total_yape)} />
               <InfoRow k="Ventas Fiado"     v={money(resumen.total_fiado)} />
+              {(resumen.total_cobros_yape + resumen.total_cobros_otros) > 0 && (
+                <InfoRow
+                  k="Cobros de deuda (Yape/otros)"
+                  v={money(resumen.total_cobros_yape + resumen.total_cobros_otros)}
+                />
+              )}
             </div>
             <DifCard esperado={resumen.esperado_efectivo} real={resumen.ingresado_real} />
             {resumen.diferencia !== 0 && (

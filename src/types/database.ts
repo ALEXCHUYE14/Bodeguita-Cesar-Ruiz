@@ -16,6 +16,9 @@ export type CategoriaEgreso =
   | 'mantenimiento'
   | 'otro'
 export type MetodoEgreso = 'efectivo' | 'yape' | 'transferencia' | 'tarjeta'
+// Mismos valores que MetodoEgreso (un abono nunca es "fiado": siempre es un
+// ingreso real) — alias propio para que el código de cobranzas se lea claro.
+export type MetodoAbono = MetodoEgreso
 
 export type Perfil = {
   id: string
@@ -121,6 +124,8 @@ export type PagoCredito = {
   cliente_id: string
   monto: number
   nota: string | null
+  metodo: MetodoAbono
+  caja_id: string | null
   cajero_id: string | null
   creado_en: string
 }
@@ -134,6 +139,12 @@ export type CajaRegistro = {
   total_yape: number
   total_fiado: number
   total_egresos: number
+  // Abonos de clientes (cobranzas) cobrados durante el turno — separados de
+  // total_efectivo/total_yape (que son solo ventas directas) para poder
+  // desglosarlos en el reporte de cierre.
+  total_cobros_efectivo: number
+  total_cobros_yape: number
+  total_cobros_otros: number
   monto_real: number | null
   estado: EstadoCaja
   abierta_en: string
@@ -247,7 +258,13 @@ export interface Database {
         Returns: ClienteCredito
       }
       registrar_abono_cliente: {
-        Args: { p_cliente_id: string; p_monto: number; p_nota: string | null }
+        Args: {
+          p_cliente_id: string
+          p_monto: number
+          p_nota?: string | null
+          p_metodo?: MetodoAbono
+          p_caja_id?: string | null
+        }
         Returns: PagoCredito
       }
       ajustar_stock: {

@@ -234,6 +234,24 @@ alter table public.cajas add column if not exists total_egresos numeric(10,2) no
 comment on column public.cajas.total_egresos is
   'Suma de salidas de caja en efectivo durante el turno (ver tabla egresos). Se resta del efectivo esperado al cerrar caja.';
 
+-- Migracion en caliente (proyectos creados antes de "cobros de deuda en caja").
+-- Los abonos de clientes (tabla pagos_credito) que se registran durante un
+-- turno se acumulan aqui, separados de "total_efectivo"/"total_yape" (que son
+-- solo ventas directas) para que el reporte de cierre pueda desglosar
+-- "Ventas" vs "Cobranzas" como dos lineas distintas, tal como exige el cuadre.
+alter table public.cajas add column if not exists total_cobros_efectivo numeric(10,2) not null default 0;
+alter table public.cajas add column if not exists total_cobros_yape     numeric(10,2) not null default 0;
+-- Cobros por transferencia/tarjeta: no son efectivo fisico en la caja, pero
+-- se registran para que el reporte del dia los muestre igual (ingreso real
+-- del negocio aunque no cuente para el arqueo de billetes).
+alter table public.cajas add column if not exists total_cobros_otros    numeric(10,2) not null default 0;
+comment on column public.cajas.total_cobros_efectivo is
+  'Suma de abonos de clientes (pagos_credito) cobrados en efectivo durante el turno. Suma al efectivo esperado al cerrar caja.';
+comment on column public.cajas.total_cobros_yape is
+  'Suma de abonos de clientes cobrados por Yape durante el turno (informativo, no es efectivo fisico).';
+comment on column public.cajas.total_cobros_otros is
+  'Suma de abonos de clientes cobrados por transferencia/tarjeta durante el turno (informativo, no es efectivo fisico).';
+
 create index if not exists idx_cajas_cajero on public.cajas (cajero_id);
 create index if not exists idx_cajas_estado on public.cajas (estado);
 
@@ -342,13 +360,30 @@ create index if not exists idx_mov_producto on public.movimientos_inventario (pr
 create table if not exists public.pagos_credito (
   id          uuid primary key default gen_random_uuid(),
   cliente_id  uuid not null references public.clientes_credito(id) on delete cascade,
-  monto       numeric(10,2) not null,
+  monto       numeric(10,2) not null check (monto > 0),
   nota        text,
   cajero_id   uuid references public.perfiles(id) on delete set null,
   creado_en   timestamptz not null default now()
 );
 
 create index if not exists idx_pagos_cliente on public.pagos_credito (cliente_id, creado_en desc);
+
+-- Migracion en caliente (proyectos creados antes de vincular abonos a caja).
+alter table public.pagos_credito add column if not exists metodo text not null default 'efectivo';
+do $$ begin
+  alter table public.pagos_credito add constraint pagos_credito_metodo_check
+    check (metodo in ('efectivo', 'yape', 'transferencia', 'tarjeta'));
+exception when duplicate_object then null; end $$;
+-- Caja en la que se cobro el abono (null = cobrado sin caja abierta en ese
+-- momento; se puede vincular despues, ver adopcion de "huerfanos" al abrir caja).
+alter table public.pagos_credito add column if not exists caja_id uuid references public.cajas(id) on delete set null;
+
+create index if not exists idx_pagos_caja on public.pagos_credito (caja_id);
+
+comment on column public.pagos_credito.metodo is
+  'Metodo con el que el cliente pago el abono (efectivo/yape/transferencia/tarjeta). No es "fiado": un abono siempre es un ingreso real.';
+comment on column public.pagos_credito.caja_id is
+  'Caja del turno en que se cobro el abono. Los cobrados en efectivo suman al efectivo esperado de esa caja (ver RPC registrar_abono_cliente).';
 
 -- ----------------------------------------------------------------------------
 -- 11. PROVEEDORES
@@ -775,27 +810,76 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 6: REGISTRAR ABONO CLIENTE (resta deuda y guarda el pago)
+-- RPC 6: REGISTRAR ABONO CLIENTE (resta deuda, guarda el pago y lo consolida
+-- en la caja activa como ingreso por cobranza)
 -- ----------------------------------------------------------------------------
+-- Transaccional: valida, actualiza la deuda del cliente, inserta el abono y
+-- suma el monto a la caja indicada, todo en una sola funcion plpgsql (una
+-- funcion = una transaccion; si algo falla a mitad de camino, Postgres
+-- revierte todo el bloque y no queda ningun registro a medias).
+-- Parametros nuevos (p_metodo, p_caja_id) se agregaron al final para poder
+-- usar "create or replace function" sin romper la firma existente.
 create or replace function public.registrar_abono_cliente(
   p_cliente_id uuid,
   p_monto      numeric,
-  p_nota       text default null
+  p_nota       text default null,
+  p_metodo     text default 'efectivo',
+  p_caja_id    uuid default null
 )
 returns public.pagos_credito
 language plpgsql
 security definer set search_path = public
 as $$
 declare
-  v_pago public.pagos_credito%rowtype;
+  v_pago    public.pagos_credito%rowtype;
+  v_cliente public.clientes_credito%rowtype;
+  v_metodo  text := coalesce(nullif(btrim(p_metodo), ''), 'efectivo');
 begin
+  if p_monto is null or p_monto <= 0 then
+    raise exception 'El monto del abono debe ser mayor a 0.';
+  end if;
+
+  if v_metodo not in ('efectivo', 'yape', 'transferencia', 'tarjeta') then
+    raise exception 'Metodo de pago invalido: %.', v_metodo;
+  end if;
+
+  -- Bloqueo de fila: evita que dos abonos simultaneos al mismo cliente lean
+  -- la misma deuda_actual "vieja" y ambos pasen la validacion por separado.
+  select * into v_cliente from public.clientes_credito where id = p_cliente_id for update;
+  if not found then
+    raise exception 'Cliente no encontrado.';
+  end if;
+
+  if p_monto > v_cliente.deuda_actual then
+    raise exception 'El abono (S/ %) no puede superar la deuda actual (S/ %).',
+      round(p_monto, 2), round(v_cliente.deuda_actual, 2);
+  end if;
+
+  if p_caja_id is not null and not exists (select 1 from public.cajas where id = p_caja_id) then
+    raise exception 'Caja no encontrada.';
+  end if;
+
   update public.clientes_credito
     set deuda_actual = greatest(deuda_actual - p_monto, 0)
     where id = p_cliente_id;
 
-  insert into public.pagos_credito (cliente_id, monto, nota, cajero_id)
-    values (p_cliente_id, p_monto, p_nota, auth.uid())
+  insert into public.pagos_credito (cliente_id, monto, nota, metodo, caja_id, cajero_id)
+    values (p_cliente_id, p_monto, p_nota, v_metodo, p_caja_id, auth.uid())
     returning * into v_pago;
+
+  -- Consolida el abono en la caja activa: efectivo/yape van a sus columnas
+  -- dedicadas de cobranza (separadas de las ventas directas para el reporte);
+  -- transferencia/tarjeta quedan solo como registro informativo (no es
+  -- efectivo fisico, no debe sumar al arqueo de billetes).
+  if p_caja_id is not null then
+    if v_metodo = 'efectivo' then
+      update public.cajas set total_cobros_efectivo = total_cobros_efectivo + p_monto where id = p_caja_id;
+    elsif v_metodo = 'yape' then
+      update public.cajas set total_cobros_yape = total_cobros_yape + p_monto where id = p_caja_id;
+    else
+      update public.cajas set total_cobros_otros = total_cobros_otros + p_monto where id = p_caja_id;
+    end if;
+  end if;
 
   return v_pago;
 end;

@@ -116,10 +116,13 @@ export function POS() {
   async function confirmarAbrirCaja() {
     setAbriendoCaja(true)
     try {
-      const { ventasAdoptadas } = await abrirCaja(parseFloat(montoInicial) || 0)
+      const { ventasAdoptadas, cobrosAdoptados } = await abrirCaja(parseFloat(montoInicial) || 0)
+      const partes: string[] = []
+      if (ventasAdoptadas > 0) partes.push(`${ventasAdoptadas} venta(s)`)
+      if (cobrosAdoptados > 0) partes.push(`${cobrosAdoptados} cobro(s) de deuda`)
       toast.exito(
-        ventasAdoptadas > 0
-          ? `Caja abierta. Se vincularon ${ventasAdoptadas} venta(s) de hoy registradas sin caja abierta.`
+        partes.length > 0
+          ? `Caja abierta. Se vincularon ${partes.join(' y ')} de hoy registrados sin caja abierta.`
           : 'Caja abierta. Ya puedes vender.',
       )
       setAbrirCajaOpen(false)
