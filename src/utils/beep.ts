@@ -44,5 +44,30 @@ export function beepError(): void {
   crearBeep(250, 0.2, 0.25)
 }
 
-/** Alias de compatibilidad (usada por CameraScanner y useKeyboardScanner) */
+/** Alias de compatibilidad (usada por useKeyboardScanner) */
 export const beepEscaner = beepExito
+
+/**
+ * Sonido real de escaner (MP3) — se reproduce al leer un codigo con la
+ * camara, imitando el "beep" de un lector de codigo de barras fisico.
+ * Se reutiliza una unica instancia de Audio para no crear objetos nuevos
+ * en cada lectura (la camara puede escanear varias veces por minuto).
+ */
+let audioScannerCam: HTMLAudioElement | null = null
+
+export function reproducirSonidoEscaner(): void {
+  try {
+    if (!audioScannerCam) {
+      audioScannerCam = new Audio('/audio/scanner.mp3')
+      audioScannerCam.volume = 0.6
+    }
+    // Reinicia por si la lectura anterior aun no termino de sonar
+    // (evita que una lectura rapida siguiente quede sin sonido).
+    audioScannerCam.currentTime = 0
+    void audioScannerCam.play().catch(() => {
+      // Autoplay bloqueado por el navegador u otro fallo: silenciar.
+    })
+  } catch {
+    // Silenciar errores (navegador sin soporte de Audio, etc.)
+  }
+}

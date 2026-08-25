@@ -7,7 +7,6 @@ import { CameraScanner } from '@/components/pos/CameraScanner'
 import { useProductoImagen } from '@/hooks/useProductoImagen'
 import { supabase } from '@/lib/supabase'
 import { cx } from '@/utils/format'
-import { beepExito } from '@/utils/beep'
 import type { Categoria, Producto, TipoVenta } from '@/types/database'
 
 const UNIDADES_GRANEL = ['kg', 'g', 'litro', 'ml']
@@ -110,7 +109,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
   }
 
   function onSkuDetectado(codigo: string) {
-    beepExito()
+    // El sonido de lectura ya lo reproduce CameraScanner al detectar el codigo.
     set('sku', codigo.trim())
     setScannerSku(false)
     if ('vibrate' in navigator) navigator.vibrate([30, 30, 30])
