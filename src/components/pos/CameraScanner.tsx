@@ -44,7 +44,6 @@ export function CameraScanner({ onScan, activo }: Props) {
             const lado = Math.floor(Math.min(w, h) * 0.7)
             return { width: lado, height: Math.floor(lado * 0.62) }
           },
-          aspectRatio: 1.2,
         },
         (texto) => {
           // Anti-rebote: ignora la misma lectura por 1.2s

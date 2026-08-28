@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { CajaProvider } from '@/context/CajaContext'
@@ -18,6 +19,7 @@ import { Egresos } from '@/pages/Egresos'
 import { Rentabilidad } from '@/pages/Rentabilidad'
 import { Configuracion } from '@/pages/Configuracion'
 import { tieneAcceso } from '@/utils/roles'
+import { desbloquearAudioEscaner } from '@/utils/beep'
 import type { Rol } from '@/types/database'
 import type { ReactNode } from 'react'
 
@@ -184,6 +186,15 @@ function Rutas() {
 }
 
 export default function App() {
+  // Desbloquea el audio del escaner en la primera interaccion del usuario
+  // con la app (tap/click), requerido por Safari/Chrome moviles antes de
+  // permitir sonido reproducido por script. Ver desbloquearAudioEscaner().
+  useEffect(() => {
+    const desbloquear = () => desbloquearAudioEscaner()
+    window.addEventListener('pointerdown', desbloquear, { once: true })
+    return () => window.removeEventListener('pointerdown', desbloquear)
+  }, [])
+
   return (
     <BrowserRouter>
       <AuthProvider>

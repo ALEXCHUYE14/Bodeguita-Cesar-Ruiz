@@ -55,18 +55,56 @@ export const beepEscaner = beepExito
  */
 let audioScannerCam: HTMLAudioElement | null = null
 
+function obtenerAudioEscaner(): HTMLAudioElement {
+  if (!audioScannerCam) {
+    audioScannerCam = new Audio('/audio/scanner.mp3')
+    audioScannerCam.preload = 'auto'
+    audioScannerCam.volume = 0.6
+  }
+  return audioScannerCam
+}
+
 export function reproducirSonidoEscaner(): void {
   try {
-    if (!audioScannerCam) {
-      audioScannerCam = new Audio('/audio/scanner.mp3')
-      audioScannerCam.volume = 0.6
-    }
+    const audio = obtenerAudioEscaner()
     // Reinicia por si la lectura anterior aun no termino de sonar
     // (evita que una lectura rapida siguiente quede sin sonido).
-    audioScannerCam.currentTime = 0
-    void audioScannerCam.play().catch(() => {
+    audio.currentTime = 0
+    void audio.play().catch(() => {
       // Autoplay bloqueado por el navegador u otro fallo: silenciar.
     })
+  } catch {
+    // Silenciar errores (navegador sin soporte de Audio, etc.)
+  }
+}
+
+/**
+ * "Desbloquea" el audio del escaner en navegadores moviles (Safari/Chrome
+ * iOS y Android), que impiden reproducir sonido por script hasta que el
+ * usuario interactua con la pagina. Sin esto, el primer play() disparado
+ * desde dentro del callback de lectura de la camara (que no cuenta como
+ * gesto directo del usuario) queda silenciado y nunca vuelve a sonar.
+ *
+ * Se llama una sola vez, en la primera interaccion del usuario con la app
+ * (ver App.tsx). Reproduce en volumen 0 y pausa de inmediato: el navegador
+ * ya cuenta ese play() como originado por el usuario y deja "desbloqueado"
+ * el elemento <audio> para reproducciones futuras desde cualquier contexto.
+ */
+export function desbloquearAudioEscaner(): void {
+  try {
+    const audio = obtenerAudioEscaner()
+    const volumenOriginal = audio.volume
+    audio.volume = 0
+    audio
+      .play()
+      .then(() => {
+        audio.pause()
+        audio.currentTime = 0
+        audio.volume = volumenOriginal
+      })
+      .catch(() => {
+        audio.volume = volumenOriginal
+      })
   } catch {
     // Silenciar errores (navegador sin soporte de Audio, etc.)
   }
