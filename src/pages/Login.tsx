@@ -28,13 +28,16 @@ export function Login() {
   const [verPass, setVerPass] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(false)
+  const [reintentando, setReintentando] = useState(false)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    setReintentando(false)
     setCargando(true)
-    const { error } = await signIn(email.trim(), password)
+    const { error } = await signIn(email.trim(), password, () => setReintentando(true))
     setCargando(false)
+    setReintentando(false)
     if (error) setError(error)
   }
 
@@ -237,6 +240,12 @@ export function Login() {
                 <LogIn className="size-4" />
                 Ingresar al sistema
               </Button>
+
+              {reintentando && (
+                <p className="text-center text-xs text-ink-400 animate-fade-up">
+                  El servidor está reactivándose, esto puede tardar unos segundos...
+                </p>
+              )}
             </form>
           </div>
         </div>

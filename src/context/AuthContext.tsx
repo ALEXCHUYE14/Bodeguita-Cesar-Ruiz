@@ -19,9 +19,20 @@ interface AuthState {
   esSupervisor: boolean
   /** true para administrador o supervisor — util para gatear paginas de solo lectura. */
   puedeVerReportes: boolean
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>
+  /** `onReintentando` (opcional) se invoca si el primer intento agota su
+   *  plazo y se pasa a un segundo intento con mas margen — util para que la
+   *  pantalla de login muestre "Reintentando..." en vez de parecer colgada. */
+  signIn: (
+    email: string,
+    password: string,
+    onReintentando?: () => void,
+  ) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
+
+// Marca especifica para distinguir "se agoto el plazo de espera" de
+// cualquier otro error real de supabase-js (credenciales invalidas, etc.).
+class TimeoutError extends Error {}
 
 const AuthContext = createContext<AuthState | undefined>(undefined)
 
@@ -66,21 +77,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  async function signIn(email: string, password: string) {
+  async function signIn(
+    email: string,
+    password: string,
+    onReintentando?: () => void,
+  ) {
     const supabaseUrl: string = import.meta.env.VITE_SUPABASE_URL || ''
     if (!supabaseUrl) {
       return { error: 'Sistema no configurado. Contacta al administrador.' }
     }
 
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Tiempo de espera agotado. Verifica tu conexión a internet.')), 12000),
-    )
+    // Proyectos Supabase en plan gratuito "duermen" tras un tiempo sin uso: el
+    // primer pedido tras la inactividad puede tardar bastante mas de lo normal
+    // en responder mientras el servidor se reactiva (medido en la practica:
+    // hasta 20-30s), y luego vuelve a responder rapido. Por eso el primer
+    // intento usa un plazo corto y, si se agota, se reintenta una sola vez con
+    // mas margen antes de darle al usuario un error — evita que un simple
+    // arranque en frio del servidor se vea como "no puedo ingresar".
+    async function intentar(ms: number) {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new TimeoutError()), ms),
+      )
+      return Promise.race([supabase.auth.signInWithPassword({ email, password }), timeout])
+    }
 
     try {
-      const { error } = await Promise.race([
-        supabase.auth.signInWithPassword({ email, password }),
-        timeout,
-      ])
+      let resultado
+      try {
+        resultado = await intentar(15000)
+      } catch (e) {
+        if (!(e instanceof TimeoutError)) throw e
+        onReintentando?.()
+        resultado = await intentar(25000)
+      }
+      const { error } = resultado
       if (error) {
         const msg =
           error.message === 'Invalid login credentials'
@@ -90,6 +120,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       return { error: null }
     } catch (e) {
+      if (e instanceof TimeoutError) {
+        return {
+          error:
+            'El servidor está tardando en responder (puede estar reactivándose tras un tiempo sin uso). Intenta nuevamente en unos segundos.',
+        }
+      }
       return { error: e instanceof Error ? e.message : 'Error de conexión.' }
     }
   }
