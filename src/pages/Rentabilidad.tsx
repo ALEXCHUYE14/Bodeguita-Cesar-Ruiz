@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, TrendingUp, AlertTriangle, ChevronDown } from 'lucide-react'
+import { Download, TrendingUp, AlertTriangle, ChevronDown, PackageX } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Card, Spinner, Button } from '@/components/ui/Button'
 import { money, fechaCorta, ymd, cx } from '@/utils/format'
@@ -16,6 +16,13 @@ interface FilaRentabilidad {
   sinCosto: boolean
 }
 
+interface FilaSinRotacion {
+  id: string
+  nombre: string
+  stock: number
+  valorizado: number
+}
+
 type Orden = 'margen' | 'vendido' | 'cantidad' | 'margenPct'
 
 export function Rentabilidad() {
@@ -28,6 +35,7 @@ export function Rentabilidad() {
   const [hasta, setHasta] = useState(hoy)
   const [cargando, setCargando] = useState(true)
   const [filas, setFilas] = useState<FilaRentabilidad[]>([])
+  const [sinRotacion, setSinRotacion] = useState<FilaSinRotacion[]>([])
   const [orden, setOrden] = useState<Orden>('margen')
 
   const cargar = useCallback(async () => {
@@ -35,9 +43,11 @@ export function Rentabilidad() {
     try {
       // Costo actual de cada producto (incluye inactivos: un producto
       // descontinuado igual debe poder aparecer en reportes de periodos pasados).
+      // Tambien trae nombre/stock para poder cruzar mas abajo que productos
+      // con stock hoy no tuvieron ni una venta en el periodo (stock muerto).
       const { data: productos } = await supabase
         .from('productos')
-        .select('id, precio_compra')
+        .select('id, nombre, precio_compra, stock_actual, activo')
       const costoPorProducto = new Map<string, number>(
         (productos ?? []).map((p) => [p.id, Number(p.precio_compra)]),
       )
@@ -83,6 +93,19 @@ export function Rentabilidad() {
         margenPct: f.totalVendido > 0 ? ((f.totalVendido - f.costoTotal) / f.totalVendido) * 100 : 0,
       }))
       setFilas(resultado)
+
+      // Stock inmovilizado: productos activos con stock hoy que no tuvieron
+      // ni una venta (valida, no anulada) durante el periodo seleccionado.
+      const muertos = (productos ?? [])
+        .filter((p) => p.activo && Number(p.stock_actual) > 0 && !mapa.has(p.id))
+        .map((p) => ({
+          id: p.id,
+          nombre: p.nombre,
+          stock: Number(p.stock_actual),
+          valorizado: Number(p.stock_actual) * Number(p.precio_compra),
+        }))
+        .sort((a, b) => b.valorizado - a.valorizado)
+      setSinRotacion(muertos)
     } finally {
       setCargando(false)
     }
@@ -135,6 +158,20 @@ export function Rentabilidad() {
       ['TOTAL', '', totales.vendido.toFixed(2), totales.costo.toFixed(2), totales.margen.toFixed(2), margenPctGlobal.toFixed(1)],
     ]
     descargarCSV(`rentabilidad_${desde}_a_${hasta}.csv`, rows)
+  }
+
+  const valorizadoSinRotacion = sinRotacion.reduce((s, f) => s + f.valorizado, 0)
+
+  function exportarSinRotacionCSV() {
+    const rows: (string | number)[][] = [
+      [`Stock sin ventas — ${fechaCorta(`${desde}T00:00:00`)} al ${fechaCorta(`${hasta}T00:00:00`)}`],
+      [],
+      ['Producto', 'Stock actual', 'Valorizado (costo x stock)'],
+      ...sinRotacion.map((f) => [f.nombre, f.stock, f.valorizado.toFixed(2)]),
+      [],
+      ['TOTAL', '', valorizadoSinRotacion.toFixed(2)],
+    ]
+    descargarCSV(`stock_sin_rotacion_${desde}_a_${hasta}.csv`, rows)
   }
 
   return (
@@ -331,6 +368,39 @@ export function Rentabilidad() {
           </>
         )}
       </Card>
+
+      {/* Stock sin rotación: productos con stock hoy y cero ventas en el periodo */}
+      {!cargando && sinRotacion.length > 0 && (
+        <Card className="overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-ink-100 px-4 py-2.5">
+            <div>
+              <h3 className="text-sm font-bold text-ink-900">Stock sin rotación</h3>
+              <p className="text-xs text-ink-400">
+                {sinRotacion.length} producto{sinRotacion.length === 1 ? '' : 's'} con stock y sin
+                ninguna venta en el periodo · {money(valorizadoSinRotacion)} inmovilizado
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={exportarSinRotacionCSV}>
+              <Download className="size-4" /> <span className="hidden sm:inline">Descargar</span>
+            </Button>
+          </div>
+
+          <ul className="max-h-80 divide-y divide-ink-100 overflow-y-auto">
+            {sinRotacion.map((f) => (
+              <li key={f.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <PackageX className="size-4 shrink-0 text-ink-300" />
+                  <p className="truncate text-sm font-semibold text-ink-800">{f.nombre}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="tabular text-sm font-bold text-ink-900">{money(f.valorizado)}</p>
+                  <p className="tabular text-xs text-ink-400">{f.stock} en stock</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </div>
   )
 }

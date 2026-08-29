@@ -8,6 +8,7 @@ import {
   Ban,
   ChevronDown,
   Download,
+  MessageCircle,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
@@ -27,7 +28,12 @@ import {
   cantidad,
 } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
-import { imprimirTicket, type LineaTicket } from '@/utils/imprimirTicket'
+import {
+  imprimirTicket,
+  abrirTicketPorWhatsApp,
+  type LineaTicket,
+  type DatosTicket,
+} from '@/utils/imprimirTicket'
 import type { DetalleVenta, MetodoPago, Perfil, Venta } from '@/types/database'
 
 // ── Rangos de fecha alineados a calendario (semana/quincena/mes) ─────────────
@@ -652,10 +658,14 @@ function TicketReprint({
   const [detalle, setDetalle] = useState<DetalleVenta[]>([])
   const [cargando, setCargando] = useState(false)
   const [anulando, setAnulando] = useState(false)
+  const [waAbierto, setWaAbierto] = useState(false)
+  const [telWA, setTelWA] = useState('')
 
   useEffect(() => {
     if (!venta) return
     setCargando(true)
+    setWaAbierto(false)
+    setTelWA('')
     supabase
       .from('detalle_ventas')
       .select('*')
@@ -683,9 +693,11 @@ function TicketReprint({
     onAnulada()
   }
 
-  function imprimir() {
-    if (!venta) return
-    imprimirTicket({
+  // Un solo objeto de datos para imprimir y para WhatsApp: evita que el
+  // texto enviado se desincronice del ticket impreso.
+  function datosTicket(): DatosTicket | null {
+    if (!venta) return null
+    return {
       numero: venta.numero,
       fecha: venta.creado_en,
       cajero: venta.cajero_nombre,
@@ -699,7 +711,25 @@ function TicketReprint({
       vuelto: venta.metodo === 'efectivo' ? venta.vuelto : 0,
       clienteNombre: venta.cliente_nombre,
       anulada: venta.anulada,
-    })
+    }
+  }
+
+  function imprimir() {
+    const datos = datosTicket()
+    if (datos) imprimirTicket(datos)
+  }
+
+  function enviarWhatsApp() {
+    const datos = datosTicket()
+    if (!datos) return
+    const tel = telWA.replace(/\D/g, '')
+    if (tel.length < 6) {
+      toast.error('Ingresa un número de WhatsApp válido.')
+      return
+    }
+    abrirTicketPorWhatsApp(tel, datos)
+    setWaAbierto(false)
+    setTelWA('')
   }
 
   if (!venta) return null
@@ -781,6 +811,35 @@ function TicketReprint({
           {Number(venta.vuelto) > 0 && <Fila k="Vuelto" v={money(Number(venta.vuelto))} />}
         </div>
         <p className="mt-3 text-center text-xs text-ink-400">¡Gracias por su compra!</p>
+      </div>
+
+      {/* Enviar ticket por WhatsApp */}
+      <div className="mt-3">
+        {!waAbierto ? (
+          <button
+            onClick={() => setWaAbierto(true)}
+            disabled={cargando}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-ink-200 py-2.5 text-sm font-semibold text-ink-600 transition hover:border-ink-300 disabled:opacity-40"
+          >
+            <MessageCircle className="size-4" /> Enviar ticket por WhatsApp
+          </button>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              type="tel"
+              inputMode="numeric"
+              autoFocus
+              className="input flex-1"
+              placeholder="Número de WhatsApp (ej. 987654321)"
+              value={telWA}
+              onChange={(e) => setTelWA(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && enviarWhatsApp()}
+            />
+            <Button variant="secondary" onClick={enviarWhatsApp}>
+              <MessageCircle className="size-4" /> Enviar
+            </Button>
+          </div>
+        )}
       </div>
     </Sheet>
   )

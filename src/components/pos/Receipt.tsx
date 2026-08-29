@@ -1,8 +1,15 @@
-import { Printer, Check } from 'lucide-react'
+import { useState } from 'react'
+import { Printer, Check, MessageCircle } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
+import { useToast } from '@/components/ui/Toast'
 import { money, fechaHora, cantidad } from '@/utils/format'
-import { imprimirTicket, type LineaTicket } from '@/utils/imprimirTicket'
+import {
+  imprimirTicket,
+  abrirTicketPorWhatsApp,
+  type LineaTicket,
+  type DatosTicket,
+} from '@/utils/imprimirTicket'
 import { BRAND } from '@/config/brand'
 import type { ItemCarrito, Venta } from '@/types/database'
 
@@ -44,8 +51,14 @@ interface Props {
 }
 
 export function Receipt({ open, onClose, venta, items }: Props) {
-  function imprimir() {
-    imprimirTicket({
+  const toast = useToast()
+  const [waAbierto, setWaAbierto] = useState(false)
+  const [telWA, setTelWA] = useState('')
+
+  // Un solo objeto de datos para imprimir y para WhatsApp: evita que el
+  // texto enviado se desincronice del ticket impreso.
+  function datosTicket(): DatosTicket {
+    return {
       numero: venta.numero,
       fecha: venta.creado_en,
       cajero: venta.cajero_nombre,
@@ -58,7 +71,22 @@ export function Receipt({ open, onClose, venta, items }: Props) {
       pagoRecibido: venta.pago_recibido,
       vuelto: venta.metodo === 'efectivo' ? venta.vuelto : 0,
       clienteNombre: venta.cliente_nombre,
-    })
+    }
+  }
+
+  function imprimir() {
+    imprimirTicket(datosTicket())
+  }
+
+  function enviarWhatsApp() {
+    const tel = telWA.replace(/\D/g, '')
+    if (tel.length < 6) {
+      toast.error('Ingresa un número de WhatsApp válido.')
+      return
+    }
+    abrirTicketPorWhatsApp(tel, datosTicket())
+    setWaAbierto(false)
+    setTelWA('')
   }
 
   return (
@@ -154,6 +182,34 @@ export function Receipt({ open, onClose, venta, items }: Props) {
 
         <hr className="my-2 border-dashed border-ink-300" />
         <p className="text-center text-ink-400">¡Gracias por su compra!</p>
+      </div>
+
+      {/* Enviar ticket por WhatsApp */}
+      <div className="mt-3">
+        {!waAbierto ? (
+          <button
+            onClick={() => setWaAbierto(true)}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-ink-200 py-2.5 text-sm font-semibold text-ink-600 transition hover:border-ink-300"
+          >
+            <MessageCircle className="size-4" /> Enviar ticket por WhatsApp
+          </button>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              type="tel"
+              inputMode="numeric"
+              autoFocus
+              className="input flex-1"
+              placeholder="Número de WhatsApp (ej. 987654321)"
+              value={telWA}
+              onChange={(e) => setTelWA(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && enviarWhatsApp()}
+            />
+            <Button variant="secondary" onClick={enviarWhatsApp}>
+              <MessageCircle className="size-4" /> Enviar
+            </Button>
+          </div>
+        )}
       </div>
     </Sheet>
   )

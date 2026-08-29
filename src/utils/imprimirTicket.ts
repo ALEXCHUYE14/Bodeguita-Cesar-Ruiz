@@ -68,8 +68,6 @@ export function imprimirTicket(datos: DatosTicket): void {
     ? `<div class="anulada">*** COMPROBANTE ANULADO ***</div>`
     : ''
 
-  const logoUrl = `${window.location.origin}/img/logo.png`
-
   const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -102,14 +100,6 @@ export function imprimirTicket(datos: DatosTicket): void {
     .header {
       text-align: center;
       margin-bottom: 3mm;
-    }
-    .logo {
-      display: block;
-      max-height: 46px;
-      max-width: 55mm;
-      width: auto;
-      margin: 0 auto 2mm;
-      object-fit: contain;
     }
     .nombre-negocio {
       font-size: 15pt;
@@ -240,7 +230,6 @@ export function imprimirTicket(datos: DatosTicket): void {
 <body>
 
   <div class="header">
-    <img class="logo" src="${logoUrl}" alt="" onerror="this.style.display='none'"/>
     <div class="nombre-negocio">${esc(BRAND.nombre.toUpperCase())}</div>
     <div class="sub-header">${fechaHora(datos.fecha)}</div>
     <div class="sub-header">Cajero: ${datos.cajero ? esc(datos.cajero) : '-'}</div>
@@ -318,4 +307,51 @@ export function imprimirTicket(datos: DatosTicket): void {
   setTimeout(() => {
     w.print()
   }, 350)
+}
+
+// ─── Envío del ticket por WhatsApp ──────────────────────────────────────────
+// Comparte los mismos datos que imprimirTicket() (el llamador arma un solo
+// DatosTicket y lo usa para ambas acciones), asi que el texto enviado nunca
+// puede desincronizarse del ticket impreso.
+
+/** Arma el texto plano (con formato WhatsApp `*negrita*`) del ticket. */
+export function mensajeTicketWhatsApp(datos: DatosTicket): string {
+  const lineas = datos.lineas
+    .map(
+      (l) =>
+        `• ${l.etiquetaCantidad} ${l.nombre}${l.etiquetaModalidad ? ` [${l.etiquetaModalidad}]` : ''} — ${money(l.monto)}`,
+    )
+    .join('\n')
+
+  const partes = [
+    `*${BRAND.nombre}*`,
+    `Ticket N° ${datos.numero} · ${fechaHora(datos.fecha)}`,
+    '',
+    lineas,
+    '',
+    `Subtotal: ${money(datos.subtotal + datos.descuento)}`,
+  ]
+  if (datos.descuento > 0) partes.push(`Descuento: - ${money(datos.descuento)}`)
+  partes.push(`IGV (18%): ${money(datos.igv)}`)
+  partes.push(`*TOTAL: ${money(datos.total)}*`)
+  partes.push('')
+  partes.push(`Pago (${datos.metodoPagoEtiqueta}): ${money(datos.pagoRecibido)}`)
+  if (datos.vuelto > 0) partes.push(`Vuelto: ${money(datos.vuelto)}`)
+  if (datos.clienteNombre) partes.push(`Fiado a: ${datos.clienteNombre}`)
+  if (datos.anulada) partes.push('', '*** COMPROBANTE ANULADO ***')
+  partes.push('', '¡Gracias por su compra! 🙏')
+
+  return partes.join('\n')
+}
+
+/**
+ * Abre WhatsApp Web/App con el ticket ya redactado, listo para enviar al
+ * numero indicado. `telefono` admite cualquier formato (espacios, guiones):
+ * se limpia y se antepone el codigo de pais de Peru (51), igual que el
+ * recordatorio de deuda de Clientes.tsx.
+ */
+export function abrirTicketPorWhatsApp(telefono: string, datos: DatosTicket): void {
+  const tel = telefono.replace(/\D/g, '')
+  const mensaje = mensajeTicketWhatsApp(datos)
+  window.open(`https://wa.me/51${tel}?text=${encodeURIComponent(mensaje)}`, '_blank', 'noopener,noreferrer')
 }

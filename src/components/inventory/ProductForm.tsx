@@ -17,6 +17,9 @@ interface Props {
   producto: Producto | null
   categorias: Categoria[]
   onGuardado: () => void
+  /** SKU ya leido (p.ej. por el escaneo rapido de Inventario) para precargar
+   *  en un producto nuevo. Se ignora si `producto` viene con datos (edicion). */
+  skuInicial?: string
 }
 
 function mensajeDeError(e: unknown): string {
@@ -43,7 +46,7 @@ const vacio = {
   precio_venta_saco: '',
 }
 
-export function ProductForm({ open, onClose, producto, categorias, onGuardado }: Props) {
+export function ProductForm({ open, onClose, producto, categorias, onGuardado, skuInicial }: Props) {
   const toast = useToast()
   const { subiendo, subir } = useProductoImagen()
   const nombreRef = useRef<HTMLInputElement>(null)
@@ -80,15 +83,18 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado }:
       setTieneSaco(producto.tiene_saco)
       setTipoVenta(producto.tipo_venta ?? 'unidad')
     } else {
-      setF(vacio)
+      setF({ ...vacio, sku: skuInicial ?? '' })
       setTieneCaja(false)
       setTieneSaco(false)
       setTipoVenta('unidad')
+      // Si llega con un SKU ya leido (escaneo rapido desde Inventario), el
+      // usuario solo necesita escribir el nombre: enfocamos ese campo.
+      if (open && skuInicial) setTimeout(() => nombreRef.current?.focus(), 150)
     }
     setImageFile(null)
     setImagePreview(null)
     setScannerSku(false)
-  }, [producto, open])
+  }, [producto, open, skuInicial])
 
   function set<K extends keyof typeof vacio>(k: K, v: string) {
     setF((prev) => ({ ...prev, [k]: v }))

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import {
   Plus,
   Search,
@@ -9,6 +9,7 @@ import {
   PackageX,
   Trash2,
   Download,
+  Camera,
 } from 'lucide-react'
 import { useProductos } from '@/hooks/useProductos'
 import { useAuth } from '@/context/AuthContext'
@@ -18,6 +19,7 @@ import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { ProductForm } from '@/components/inventory/ProductForm'
 import { StockAdjust } from '@/components/inventory/StockAdjust'
+import { CameraScanner } from '@/components/pos/CameraScanner'
 import { money, cx, fechaHora, cantidad, etiquetaUnidad, ymd } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
 import type { MovimientoInventario, Producto } from '@/types/database'
@@ -30,10 +32,12 @@ export function Inventario() {
   const [soloBajo, setSoloBajo] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
   const [editando, setEditando] = useState<Producto | null>(null)
+  const [skuNuevo, setSkuNuevo] = useState('')
   const [ajuste, setAjuste] = useState<Producto | null>(null)
   const [kardex, setKardex] = useState<Producto | null>(null)
   const [eliminarConfirm, setEliminarConfirm] = useState<Producto | null>(null)
   const [eliminando, setEliminando] = useState(false)
+  const [scannerAbierto, setScannerAbierto] = useState(false)
 
   const filtrados = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -82,12 +86,38 @@ export function Inventario() {
 
   function abrirNuevo() {
     setEditando(null)
+    setSkuNuevo('')
     setFormOpen(true)
   }
   function abrirEditar(p: Producto) {
     setEditando(p)
     setFormOpen(true)
   }
+
+  // Escaneo rapido: si el codigo ya existe en inventario, va directo a
+  // "Entrada de stock" (el sonido de lectura ya lo reproduce CameraScanner);
+  // si no existe, abre "Nuevo producto" con el SKU ya cargado.
+  const onEscaneoInventario = useCallback(
+    (codigo: string) => {
+      const sku = codigo.trim()
+      const prod = productos.find((p) => p.sku === sku)
+      setScannerAbierto(false)
+      if (prod) {
+        setAjuste(prod)
+        toast.exito(`${prod.nombre} — registra la entrada de stock`)
+      } else if (esAdmin) {
+        // Dar de alta productos nuevos es exclusivo de administrador (igual
+        // que el boton "Nuevo producto"): el escaneo respeta el mismo permiso.
+        setEditando(null)
+        setSkuNuevo(sku)
+        setFormOpen(true)
+        toast.info('Código no registrado. Completa los datos del producto nuevo.')
+      } else {
+        toast.error('Código no registrado. Pide a un administrador que lo dé de alta.')
+      }
+    },
+    [productos, toast, esAdmin],
+  )
 
   async function confirmarEliminar() {
     if (!eliminarConfirm) return
@@ -119,6 +149,9 @@ export function Inventario() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={exportarCSV} disabled={productos.length === 0}>
             <Download className="size-4" /> <span className="hidden sm:inline">Descargar</span>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setScannerAbierto(true)}>
+            <Camera className="size-4" /> <span className="hidden sm:inline">Escanear</span>
           </Button>
           {esAdmin && (
             <Button variant="primary" onClick={abrirNuevo}>
@@ -315,12 +348,27 @@ export function Inventario() {
         </div>
       </Sheet>
 
+      {/* Escaneo rapido: producto existente -> entrada de stock; nuevo -> alta */}
+      <Sheet
+        open={scannerAbierto}
+        onClose={() => setScannerAbierto(false)}
+        title="Escanear producto"
+        maxWidth="max-w-md"
+      >
+        <CameraScanner activo={scannerAbierto} onScan={onEscaneoInventario} />
+        <p className="mt-3 text-center text-xs text-ink-400">
+          Apunta al código de barras o QR del producto. Si ya existe se abrirá
+          la entrada de stock; si no, el alta de producto nuevo.
+        </p>
+      </Sheet>
+
       <ProductForm
         open={formOpen}
         onClose={() => setFormOpen(false)}
         producto={editando}
         categorias={categorias}
         onGuardado={recargar}
+        skuInicial={skuNuevo}
       />
       <StockAdjust
         open={!!ajuste}
