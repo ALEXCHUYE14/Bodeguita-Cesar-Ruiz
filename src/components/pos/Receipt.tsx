@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Printer, Check, MessageCircle } from 'lucide-react'
+import { Printer, Check, MessageCircle, Bluetooth } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
@@ -10,6 +10,7 @@ import {
   type LineaTicket,
   type DatosTicket,
 } from '@/utils/imprimirTicket'
+import { imprimirPorBluetooth, bluetoothDisponible } from '@/utils/bluetoothPrint'
 import { BRAND } from '@/config/brand'
 import type { ItemCarrito, Venta } from '@/types/database'
 
@@ -54,6 +55,7 @@ export function Receipt({ open, onClose, venta, items }: Props) {
   const toast = useToast()
   const [waAbierto, setWaAbierto] = useState(false)
   const [telWA, setTelWA] = useState('')
+  const [btImprimiendo, setBtImprimiendo] = useState(false)
 
   // Un solo objeto de datos para imprimir y para WhatsApp: evita que el
   // texto enviado se desincronice del ticket impreso.
@@ -78,6 +80,18 @@ export function Receipt({ open, onClose, venta, items }: Props) {
     imprimirTicket(datosTicket())
   }
 
+  async function imprimirBT() {
+    setBtImprimiendo(true)
+    try {
+      await imprimirPorBluetooth(datosTicket())
+      toast.exito('Ticket enviado a la impresora Bluetooth')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo imprimir por Bluetooth')
+    } finally {
+      setBtImprimiendo(false)
+    }
+  }
+
   function enviarWhatsApp() {
     const tel = telWA.replace(/\D/g, '')
     if (tel.length < 6) {
@@ -95,11 +109,18 @@ export function Receipt({ open, onClose, venta, items }: Props) {
       onClose={onClose}
       maxWidth="max-w-sm"
       footer={
-        <div className="flex gap-2">
-          <Button variant="outline" className="flex-1" onClick={imprimir}>
-            <Printer className="size-4" /> Imprimir ticket
-          </Button>
-          <Button variant="secondary" className="flex-1" onClick={onClose}>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={imprimir}>
+              <Printer className="size-4" /> Imprimir
+            </Button>
+            {bluetoothDisponible() && (
+              <Button variant="outline" className="flex-1" loading={btImprimiendo} onClick={imprimirBT}>
+                <Bluetooth className="size-4" /> Bluetooth
+              </Button>
+            )}
+          </div>
+          <Button variant="secondary" className="w-full" onClick={onClose}>
             Nueva venta
           </Button>
         </div>

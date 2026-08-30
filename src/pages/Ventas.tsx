@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Download,
   MessageCircle,
+  Bluetooth,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
@@ -34,6 +35,7 @@ import {
   type LineaTicket,
   type DatosTicket,
 } from '@/utils/imprimirTicket'
+import { imprimirPorBluetooth, bluetoothDisponible } from '@/utils/bluetoothPrint'
 import type { DetalleVenta, MetodoPago, Perfil, Venta } from '@/types/database'
 
 // ── Rangos de fecha alineados a calendario (semana/quincena/mes) ─────────────
@@ -660,6 +662,7 @@ function TicketReprint({
   const [anulando, setAnulando] = useState(false)
   const [waAbierto, setWaAbierto] = useState(false)
   const [telWA, setTelWA] = useState('')
+  const [btImprimiendo, setBtImprimiendo] = useState(false)
 
   useEffect(() => {
     if (!venta) return
@@ -719,6 +722,20 @@ function TicketReprint({
     if (datos) imprimirTicket(datos)
   }
 
+  async function imprimirBT() {
+    const datos = datosTicket()
+    if (!datos) return
+    setBtImprimiendo(true)
+    try {
+      await imprimirPorBluetooth(datos)
+      toast.exito('Ticket enviado a la impresora Bluetooth')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo imprimir por Bluetooth')
+    } finally {
+      setBtImprimiendo(false)
+    }
+  }
+
   function enviarWhatsApp() {
     const datos = datosTicket()
     if (!datos) return
@@ -740,23 +757,33 @@ function TicketReprint({
       onClose={onClose}
       maxWidth="max-w-sm"
       footer={
-        <div className="flex gap-2">
-          {esAdmin && !venta.anulada && (
-            <Button variant="danger" onClick={anular} loading={anulando}>
-              <Ban className="size-4" /> Anular
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={imprimir} disabled={cargando}>
+              <Printer className="size-4" /> Imprimir
             </Button>
-          )}
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={imprimir}
-            disabled={cargando}
-          >
-            <Printer className="size-4" /> Imprimir
-          </Button>
-          <Button variant="secondary" className="flex-1" onClick={onClose}>
-            Cerrar
-          </Button>
+            {bluetoothDisponible() && (
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={imprimirBT}
+                disabled={cargando}
+                loading={btImprimiendo}
+              >
+                <Bluetooth className="size-4" /> Bluetooth
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {esAdmin && !venta.anulada && (
+              <Button variant="danger" className="flex-1" onClick={anular} loading={anulando}>
+                <Ban className="size-4" /> Anular
+              </Button>
+            )}
+            <Button variant="secondary" className="flex-1" onClick={onClose}>
+              Cerrar
+            </Button>
+          </div>
         </div>
       }
     >
