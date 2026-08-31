@@ -34,7 +34,7 @@ export function POS() {
   const { clientes } = useClientes()
   const { perfil } = useAuth()
   const nombreDisplay = perfil?.rol === 'administrador' ? BRAND.operador : (perfil?.nombre?.split(' ')[0] ?? 'Cajero')
-  const { caja, cargando: cajaCargando, abrir: abrirCaja, sumarVenta } = useCajaCtx()
+  const { caja, cargando: cajaCargando, abrir: abrirCaja, reflejarVentaLocal } = useCajaCtx()
   const toast = useToast()
   const carrito = useCarrito()
 
@@ -163,17 +163,12 @@ export function POS() {
       })
       if (error) throw error
 
-      // Actualizar totales de la caja
+      // El propio RPC registrar_venta ya sumo el total a la caja y (si es
+      // fiado) a la deuda del cliente, de forma atomica junto con la venta.
+      // Aqui solo se refleja en el estado local para que el KPI de caja se
+      // vea al instante, sin esperar un recargo completo desde la BD.
       if (caja?.id) {
-        await sumarVenta(caja.id, metodo, carrito.totales.total)
-      }
-
-      // Actualizar deuda del cliente si la venta es al fiado
-      if (metodo === 'fiado' && clienteId) {
-        await supabase.rpc('registrar_cargo_fiado', {
-          p_cliente_id: clienteId,
-          p_monto: carrito.totales.total,
-        })
+        reflejarVentaLocal(caja.id, metodo, carrito.totales.total)
       }
 
       setItemsTicket(carrito.items)

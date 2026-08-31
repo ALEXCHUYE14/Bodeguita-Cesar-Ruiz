@@ -256,16 +256,19 @@ export function useCaja(cajeroId: string | null) {
     }
   }
 
-  // Incrementa los totales de la caja tras una venta — llamado desde POS.
-  // IMPORTANTE: si el RPC `registrar_venta` ya actualiza `cajas` de forma
-  // atómica, eliminar la llamada a `incrementar_caja` aquí y conservar solo
-  // la actualización optimista de estado local (setCaja) para evitar doble
-  // conteo en la base de datos.
-  async function sumarVenta(
+  // Refleja en el estado local de React el total de una venta que el propio
+  // RPC `registrar_venta` YA sumo a `cajas` de forma atomica (junto con el
+  // resto de la venta: stock, kardex, deuda del cliente si es fiado). No
+  // llama a ningun RPC — solo evita esperar un recargo completo para que el
+  // KPI de caja se vea al instante. Antes esto llamaba por separado al RPC
+  // `incrementar_caja` DESPUES de registrar la venta, lo que podia dejar el
+  // total de caja desincronizado de la venta si la conexion se cortaba justo
+  // entre ambas llamadas.
+  function reflejarVentaLocal(
     cajaId: string,
     metodo: 'efectivo' | 'yape' | 'fiado',
     monto: number,
-  ): Promise<void> {
+  ): void {
     const campo =
       metodo === 'efectivo'
         ? 'total_efectivo'
@@ -273,13 +276,6 @@ export function useCaja(cajeroId: string | null) {
         ? 'total_yape'
         : 'total_fiado'
 
-    await supabase.rpc('incrementar_caja', {
-      p_caja_id: cajaId,
-      p_metodo: metodo,
-      p_monto: toNum(monto),
-    } as never)
-
-    // Actualización optimista con conversión numérica segura
     setCaja((prev) =>
       prev && prev.id === cajaId
         ? { ...prev, [campo]: toNum(prev[campo as keyof CajaRegistro]) + toNum(monto) }
@@ -315,7 +311,7 @@ export function useCaja(cajeroId: string | null) {
     cargando,
     abrir,
     cerrar,
-    sumarVenta,
+    reflejarVentaLocal,
     sumarCobro,
     total,
     recargar: cargar,

@@ -556,6 +556,14 @@ declare
   v_venta       public.ventas%rowtype;
   v_nombre      text;
   v_cli_nombre  text;
+  -- Acumula, por producto, el total de unidades reales que se van a
+  -- descontar en TODA la venta — un mismo producto puede aparecer dos veces
+  -- en el carrito (ej. unidades sueltas + una caja completa). Validar cada
+  -- linea del carrito por separado contra el stock (como hacia esta funcion
+  -- antes) dejaba pasar combinaciones que, SUMADAS, superaban el stock
+  -- disponible, y el stock quedaba negativo sin ningun aviso.
+  v_mapa        jsonb := '{}'::jsonb;
+  v_req         record;
 begin
   if jsonb_array_length(p_items) = 0 then
     raise exception 'El carrito esta vacio.';
@@ -567,7 +575,8 @@ begin
     select nombre into v_cli_nombre from public.clientes_credito where id = p_cliente_id;
   end if;
 
-  -- 1) Validar stock y acumular subtotal (bloqueo de filas para evitar carreras)
+  -- 1) Bloquea cada producto involucrado y acumula subtotal + unidades
+  --    totales requeridas por producto (bloqueo de filas para evitar carreras).
   --    "unidades" es siempre lo que realmente se descuenta del stock (calculado
   --    aqui, en servidor, en vez de confiar en lo que mande el frontend):
   --    - modalidad 'caja'  -> cantidad * unidades_por_caja del producto
@@ -596,12 +605,24 @@ begin
                   end;
     v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
 
-    if v_producto.stock_actual < v_unidades then
-      raise exception 'Stock insuficiente para "%": disponible % %, solicitado %',
-        v_producto.nombre, v_producto.stock_actual, v_producto.unidad, v_unidades;
-    end if;
+    v_mapa := jsonb_set(
+      v_mapa,
+      array[v_producto.id::text],
+      to_jsonb(coalesce((v_mapa->>v_producto.id::text)::numeric, 0) + v_unidades)
+    );
 
     v_subtotal := v_subtotal + (v_precio * v_cantidad);
+  end loop;
+
+  -- Valida el stock disponible contra el TOTAL acumulado por producto (no
+  -- por linea de carrito individual).
+  for v_req in select key as producto_id, value::numeric as unidades from jsonb_each_text(v_mapa)
+  loop
+    select * into v_producto from public.productos where id = v_req.producto_id::uuid;
+    if v_producto.stock_actual < v_req.unidades then
+      raise exception 'Stock insuficiente para "%": disponible % %, solicitado %',
+        v_producto.nombre, v_producto.stock_actual, v_producto.unidad, v_req.unidades;
+    end if;
   end loop;
 
   -- 2) Calculos (IGV incluido en precio de venta - modelo peruano)
@@ -655,6 +676,32 @@ begin
       'Venta #' || v_venta.numero, auth.uid()
     );
   end loop;
+
+  -- 5) Caja y deuda del cliente fiado, DENTRO de la misma transaccion que la
+  --    venta. Antes esto se hacia con llamadas RPC separadas desde el
+  --    cliente (incrementar_caja / registrar_cargo_fiado) DESPUES de que
+  --    esta funcion ya habia confirmado la venta: si el navegador perdia
+  --    conexion justo entre esas llamadas (tipico en datos moviles de una
+  --    bodega), la venta quedaba registrada y el stock descontado
+  --    correctamente, pero el total de la caja o la deuda del cliente NO se
+  --    actualizaban — un descuadre invisible que no aparecia en ningun lado
+  --    hasta el cierre de caja. Ahora todo ocurre en un solo commit: o se
+  --    guarda completo, o no se guarda nada.
+  if p_caja_id is not null then
+    if p_metodo = 'efectivo' then
+      update public.cajas set total_efectivo = total_efectivo + v_total where id = p_caja_id;
+    elsif p_metodo = 'yape' then
+      update public.cajas set total_yape = total_yape + v_total where id = p_caja_id;
+    elsif p_metodo = 'fiado' then
+      update public.cajas set total_fiado = total_fiado + v_total where id = p_caja_id;
+    end if;
+  end if;
+
+  if p_metodo = 'fiado' and p_cliente_id is not null then
+    update public.clientes_credito
+      set deuda_actual = deuda_actual + v_total
+      where id = p_cliente_id;
+  end if;
 
   return v_venta;
 end;

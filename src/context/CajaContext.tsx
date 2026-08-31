@@ -14,7 +14,7 @@ interface CajaState {
   cargando: boolean
   abrir: (montoInicial: number) => Promise<{ caja: CajaRegistro; ventasAdoptadas: number; cobrosAdoptados: number }>
   cerrar: (montoReal: number) => Promise<ResumenCierre>
-  sumarVenta: (cajaId: string, metodo: 'efectivo' | 'yape' | 'fiado', monto: number) => Promise<void>
+  reflejarVentaLocal: (cajaId: string, metodo: 'efectivo' | 'yape' | 'fiado', monto: number) => void
   sumarCobro: (cajaId: string, metodo: 'efectivo' | 'yape' | 'transferencia' | 'tarjeta', monto: number) => void
   total: number
   recargar: () => void
@@ -34,7 +34,7 @@ export function CajaProvider({ children }: { children: ReactNode }) {
     cargando: cajaCargando,
     abrir: abrirHook,
     cerrar,
-    sumarVenta,
+    reflejarVentaLocal,
     sumarCobro,
     total,
     recargar,
@@ -55,7 +55,7 @@ export function CajaProvider({ children }: { children: ReactNode }) {
     cargando: authCargando || cajaCargando,
     abrir,
     cerrar,
-    sumarVenta,
+    reflejarVentaLocal,
     sumarCobro,
     total,
     recargar,
