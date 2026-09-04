@@ -10,6 +10,7 @@ import {
   Trash2,
   Download,
   Camera,
+  Lock,
 } from 'lucide-react'
 import { useProductos } from '@/hooks/useProductos'
 import { useAuth } from '@/context/AuthContext'
@@ -23,6 +24,12 @@ import { CameraScanner } from '@/components/pos/CameraScanner'
 import { money, cx, fechaHora, cantidad, etiquetaUnidad, ymd } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
 import type { MovimientoInventario, Producto } from '@/types/database'
+
+// Clave requerida para confirmar edicion/eliminacion de un producto ya
+// existente — capa adicional al permiso de rol (esAdmin), no un reemplazo:
+// las acciones ya estaban restringidas a administrador; esto agrega un paso
+// de confirmacion explicito antes de modificar o borrar algo del catalogo.
+const CLAVE_INVENTARIO = '46760768'
 
 export function Inventario() {
   const { productos, categorias, recargar } = useProductos()
@@ -38,6 +45,11 @@ export function Inventario() {
   const [eliminarConfirm, setEliminarConfirm] = useState<Producto | null>(null)
   const [eliminando, setEliminando] = useState(false)
   const [scannerAbierto, setScannerAbierto] = useState(false)
+
+  // Candado de clave para editar/eliminar un producto (ver CLAVE_INVENTARIO).
+  const [pinPendiente, setPinPendiente] = useState<{ titulo: string; accion: () => void } | null>(null)
+  const [pinValor, setPinValor] = useState('')
+  const [pinError, setPinError] = useState(false)
 
   const filtrados = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -92,6 +104,33 @@ export function Inventario() {
   function abrirEditar(p: Producto) {
     setEditando(p)
     setFormOpen(true)
+  }
+
+  // Pide la clave de administrador antes de ejecutar una accion sensible
+  // (editar o eliminar un producto ya existente). "accion" solo se ejecuta
+  // si la clave ingresada coincide con CLAVE_INVENTARIO.
+  function pedirPin(titulo: string, accion: () => void) {
+    setPinValor('')
+    setPinError(false)
+    setPinPendiente({ titulo, accion })
+  }
+
+  function confirmarPin() {
+    if (pinValor.trim() !== CLAVE_INVENTARIO) {
+      setPinError(true)
+      return
+    }
+    const accion = pinPendiente?.accion
+    setPinPendiente(null)
+    setPinValor('')
+    setPinError(false)
+    accion?.()
+  }
+
+  function cerrarPin() {
+    setPinPendiente(null)
+    setPinValor('')
+    setPinError(false)
   }
 
   // Escaneo rapido: si el codigo ya existe en inventario, va directo a
@@ -267,12 +306,12 @@ export function Inventario() {
                       <History className="size-[18px]" />
                     </IconBtn>
                     {esAdmin && (
-                      <IconBtn title="Editar" onClick={() => abrirEditar(p)}>
+                      <IconBtn title="Editar" onClick={() => pedirPin('Editar producto', () => abrirEditar(p))}>
                         <Pencil className="size-[18px]" />
                       </IconBtn>
                     )}
                     {esAdmin && (
-                      <IconBtn title="Eliminar" onClick={() => setEliminarConfirm(p)}>
+                      <IconBtn title="Eliminar" onClick={() => pedirPin('Eliminar producto', () => setEliminarConfirm(p))}>
                         <Trash2 className="size-[18px] text-red-400" />
                       </IconBtn>
                     )}
@@ -294,7 +333,7 @@ export function Inventario() {
                     </button>
                     {esAdmin && (
                       <button
-                        onClick={() => abrirEditar(p)}
+                        onClick={() => pedirPin('Editar producto', () => abrirEditar(p))}
                         className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-ink-100 py-1.5 text-xs font-semibold text-ink-600"
                       >
                         <Pencil className="size-4" /> Editar
@@ -302,7 +341,7 @@ export function Inventario() {
                     )}
                     {esAdmin && (
                       <button
-                        onClick={() => setEliminarConfirm(p)}
+                        onClick={() => pedirPin('Eliminar producto', () => setEliminarConfirm(p))}
                         className="flex items-center justify-center gap-1 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600"
                       >
                         <Trash2 className="size-4" />
@@ -377,6 +416,48 @@ export function Inventario() {
         onListo={recargar}
       />
       <KardexSheet producto={kardex} onClose={() => setKardex(null)} />
+
+      {/* Clave requerida para editar/eliminar un producto */}
+      <Sheet
+        open={!!pinPendiente}
+        onClose={cerrarPin}
+        title={pinPendiente?.titulo ?? 'Verificación requerida'}
+        maxWidth="max-w-sm"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={cerrarPin}>
+              Cancelar
+            </Button>
+            <Button variant="primary" className="flex-1" onClick={confirmarPin}>
+              Confirmar
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-ink-500">
+            <Lock className="size-4" />
+            <p className="text-sm">Ingresa la clave para continuar con esta acción.</p>
+          </div>
+          <input
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            className={cx(
+              'input tabular text-center text-lg tracking-[0.3em]',
+              pinError && 'border-red-400 focus:border-red-400',
+            )}
+            value={pinValor}
+            onChange={(e) => {
+              setPinValor(e.target.value)
+              setPinError(false)
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && confirmarPin()}
+            placeholder="••••••••"
+          />
+          {pinError && <p className="text-sm text-red-600">Clave incorrecta.</p>}
+        </div>
+      </Sheet>
     </div>
   )
 }
