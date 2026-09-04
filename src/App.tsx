@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { CajaProvider } from '@/context/CajaContext'
+import { CarritoProvider } from '@/context/CarritoContext'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AppShell } from '@/components/layout/AppShell'
 import { Spinner } from '@/components/ui/Button'
@@ -199,9 +200,11 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <CajaProvider>
-          <ToastProvider>
-            <Rutas />
-          </ToastProvider>
+          <CarritoProvider>
+            <ToastProvider>
+              <Rutas />
+            </ToastProvider>
+          </CarritoProvider>
         </CajaProvider>
       </AuthProvider>
     </BrowserRouter>

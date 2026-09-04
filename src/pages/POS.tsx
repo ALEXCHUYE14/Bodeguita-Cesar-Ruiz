@@ -17,6 +17,7 @@ import { useClientes } from '@/hooks/useClientes'
 import { useKeyboardScanner } from '@/hooks/useKeyboardScanner'
 import { useAuth } from '@/context/AuthContext'
 import { useCajaCtx } from '@/context/CajaContext'
+import { useCarritoCtx } from '@/context/CarritoContext'
 import { supabase } from '@/lib/supabase'
 import { Button, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
@@ -36,7 +37,10 @@ export function POS() {
   const nombreDisplay = perfil?.rol === 'administrador' ? BRAND.operador : (perfil?.nombre?.split(' ')[0] ?? 'Cajero')
   const { caja, cargando: cajaCargando, abrir: abrirCaja, reflejarVentaLocal } = useCajaCtx()
   const toast = useToast()
-  const carrito = useCarrito()
+  // Vive en un Provider en la raiz de la app (ver App.tsx / CarritoContext),
+  // no como estado local de esta pagina: asi el carrito sobrevive si el
+  // cajero navega a otra pantalla (Inventario, Clientes...) y vuelve a POS.
+  const carrito = useCarritoCtx()
 
   const [busqueda, setBusqueda] = useState('')
   const [catSel, setCatSel] = useState<string | null>(null)
