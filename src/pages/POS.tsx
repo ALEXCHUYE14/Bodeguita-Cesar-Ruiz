@@ -381,12 +381,53 @@ export function POS() {
         <CartItems carrito={carrito} />
       </Sheet>
 
-      {/* Escaner camara */}
-      <Sheet open={camAbierta} onClose={() => setCamAbierta(false)} title="Escanear producto" maxWidth="max-w-md">
+      {/* Escaner camara — con la lista de productos escaneados en vivo debajo
+          (reutiliza CartItems: mismo estado de carrito, mismos controles de
+          cantidad/eliminar y mismo calculo de precio que el resto del POS). */}
+      <Sheet
+        open={camAbierta}
+        onClose={() => setCamAbierta(false)}
+        title="Escanear producto"
+        maxWidth="max-w-md"
+        footer={
+          !carrito.vacio ? (
+            <Button
+              variant="secondary"
+              size="lg"
+              className="w-full"
+              onClick={() => {
+                setCamAbierta(false)
+                setPagoAbierto(true)
+              }}
+            >
+              Revisar orden · {money(carrito.totales.total)}
+            </Button>
+          ) : undefined
+        }
+      >
         <CameraScanner activo={camAbierta} onScan={onScan} />
         <p className="mt-3 text-center text-xs text-ink-400">
           Apunta al codigo de barras o QR del producto.
         </p>
+
+        {!carrito.vacio && (
+          <div className="mt-4 border-t border-ink-100 pt-3">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <h3 className="text-sm font-bold text-ink-900">
+                {carrito.totales.unidades} producto{carrito.totales.unidades === 1 ? '' : 's'}
+              </h3>
+              <button
+                onClick={carrito.limpiar}
+                className="text-xs font-semibold text-ink-400 hover:text-red-600"
+              >
+                Vaciar
+              </button>
+            </div>
+            <div className="max-h-64 overflow-y-auto">
+              <CartItems carrito={carrito} />
+            </div>
+          </div>
+        )}
       </Sheet>
 
       {/* Cantidad exacta para productos a granel (kg, litros, etc.) */}
@@ -724,6 +765,25 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
             key={`${i.producto.id}::${i.modalidad}`}
             className="flex items-center gap-2 rounded-xl p-2 hover:bg-ink-50"
           >
+            {/* Thumbnail — mismo patron de fallback que Inventario.tsx/ProductoCard */}
+            <div className="size-10 shrink-0 overflow-hidden rounded-lg border border-ink-100 bg-ink-50">
+              {i.producto.image_url ? (
+                <img
+                  src={i.producto.image_url}
+                  alt={i.producto.nombre}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="grid h-full w-full place-items-center">
+                  <span
+                    className="size-2 rounded-full"
+                    style={{ background: i.producto.categorias?.color ?? '#d4d4d0' }}
+                  />
+                </div>
+              )}
+            </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-ink-800">{i.producto.nombre}</p>
               <p className="tabular text-xs text-ink-400">
