@@ -75,6 +75,164 @@ const TONO_PAGO: Record<MetodoPago, 'neutral' | 'success' | 'info' | 'warning'> 
   fiado: 'warning',
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Reporte de ventas por método de pago y rango de fechas.
+   ─────────────────────────────────────────────────────────────────────────
+   Modulo de SOLO LECTURA: hace una unica consulta liviana (solo columnas
+   "metodo" y "total", filtrada por fecha) y suma en el cliente. No toca
+   ninguna tabla ni RPC de escritura, no depende de los filtros de la lista
+   de ventas de mas abajo (tiene su propio rango Desde/Hasta) y no altera
+   ningun estado que use el resto de la pagina — es 100% aditivo.
+───────────────────────────────────────────────────────────────────────── */
+
+interface FilaMetodo {
+  metodo: string
+  total: number
+  count: number
+}
+
+// Colores por metodo, en la misma paleta que ya usa esta pagina (ver
+// TONO_PAGO / Badge). Un metodo que no este aqui (ej. si algun dia se
+// habilita tarjeta/plin/transferencia en el POS) cae en el estilo neutral
+// por defecto — nunca rompe la vista, solo se ve gris.
+const ESTILO_METODO: Record<string, { bg: string; text: string }> = {
+  efectivo: { bg: 'bg-accent-50', text: 'text-accent-700' },
+  yape: { bg: 'bg-blue-50', text: 'text-blue-700' },
+  fiado: { bg: 'bg-amber-50', text: 'text-amber-700' },
+  tarjeta: { bg: 'bg-purple-50', text: 'text-purple-700' },
+  plin: { bg: 'bg-sky-50', text: 'text-sky-700' },
+  transferencia: { bg: 'bg-indigo-50', text: 'text-indigo-700' },
+}
+const ESTILO_METODO_NEUTRAL = { bg: 'bg-ink-100', text: 'text-ink-700' }
+
+function ReporteMetodoPago() {
+  const toast = useToast()
+  const hoyR = ymd(new Date())
+  const [desde, setDesde] = useState(() => ymd(inicioMesCal(new Date())))
+  const [hasta, setHasta] = useState(hoyR)
+  const [cargando, setCargando] = useState(true)
+  const [filas, setFilas] = useState<FilaMetodo[]>([])
+
+  const cargar = useCallback(async () => {
+    setCargando(true)
+    // Consulta minima: solo 2 columnas, filtrada por el rango de fechas
+    // (idx_ventas_fecha ya existe en la tabla) y por "no anulada" — el resto
+    // (suma total, suma por metodo, conteo) se calcula en el cliente. No hay
+    // forma de que esto bloquee o ralentice la BD: es un SELECT liviano,
+    // igual de eficiente que el resto de reportes de la app (Rentabilidad,
+    // historial de Ventas).
+    const { data, error } = await supabase
+      .from('ventas')
+      .select('metodo, total')
+      .eq('anulada', false)
+      .gte('creado_en', `${desde}T00:00:00`)
+      .lte('creado_en', `${hasta}T23:59:59.999`)
+      .limit(20000)
+
+    if (error) {
+      toast.error('No se pudo cargar el reporte por método de pago')
+      setFilas([])
+      setCargando(false)
+      return
+    }
+
+    const mapa = new Map<string, FilaMetodo>()
+    ;(data ?? []).forEach((v) => {
+      const prev = mapa.get(v.metodo) ?? { metodo: v.metodo, total: 0, count: 0 }
+      prev.total += Number(v.total)
+      prev.count += 1
+      mapa.set(v.metodo, prev)
+    })
+    setFilas([...mapa.values()].sort((a, b) => b.total - a.total))
+    setCargando(false)
+  }, [desde, hasta, toast])
+
+  useEffect(() => {
+    cargar()
+  }, [cargar])
+
+  const totalGeneral = filas.reduce((s, f) => s + f.total, 0)
+  const totalTransacciones = filas.reduce((s, f) => s + f.count, 0)
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-900">
+            Reporte por método de pago
+          </h2>
+          <p className="text-xs text-ink-400">Total vendido en el rango, desglosado por método</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <div>
+            <label className="label mb-1 block text-[0.65rem]">Desde</label>
+            <input
+              type="date"
+              className="input py-1.5 text-sm"
+              value={desde}
+              max={hasta}
+              onChange={(e) => setDesde(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label mb-1 block text-[0.65rem]">Hasta</label>
+            <input
+              type="date"
+              className="input py-1.5 text-sm"
+              value={hasta}
+              min={desde}
+              max={hoyR}
+              onChange={(e) => setHasta(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {cargando ? (
+        <div className="grid place-items-center py-10">
+          <Spinner className="size-5 text-ink-400" />
+        </div>
+      ) : filas.length === 0 ? (
+        <p className="py-6 text-center text-sm text-ink-400">Sin ventas en este periodo</p>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center justify-between rounded-xl bg-ink-900 px-4 py-3 text-white">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-white/50">
+                Total general
+              </p>
+              <p className="tabular font-display text-2xl font-bold">{money(totalGeneral)}</p>
+            </div>
+            <p className="text-xs text-white/60">
+              {totalTransacciones} venta{totalTransacciones === 1 ? '' : 's'}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {filas.map((f) => {
+              const estilo = ESTILO_METODO[f.metodo] ?? ESTILO_METODO_NEUTRAL
+              const pct = totalGeneral > 0 ? (f.total / totalGeneral) * 100 : 0
+              return (
+                <div key={f.metodo} className={cx('rounded-xl p-3', estilo.bg)}>
+                  <p className={cx('text-xs font-semibold uppercase tracking-wide', estilo.text)}>
+                    {ETIQUETA_PAGO[f.metodo] ?? f.metodo}
+                  </p>
+                  <p className={cx('mt-1 tabular font-display text-lg font-bold', estilo.text)}>
+                    {money(f.total)}
+                  </p>
+                  <p className="text-[0.7rem] text-ink-400">
+                    {f.count} venta{f.count === 1 ? '' : 's'} · {pct.toFixed(1)}%
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
 export function Ventas() {
   const { esAdmin } = useAuth()
   const { caja } = useCajaCtx()
@@ -267,6 +425,10 @@ export function Ventas() {
           </Button>
         </div>
       </div>
+
+      {/* Reporte por método de pago — rango de fechas propio, independiente
+          de los filtros de la lista de abajo (ver ReporteMetodoPago). */}
+      <ReporteMetodoPago />
 
       {limiteAlcanzado && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-700">
