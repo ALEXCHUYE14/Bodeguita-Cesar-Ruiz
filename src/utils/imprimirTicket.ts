@@ -1,5 +1,5 @@
 import { money, fechaHora } from '@/utils/format'
-import { BRAND } from '@/config/brand'
+import { getNegocio, etiquetaDocumento } from '@/config/negocio'
 
 // Impresión de tickets de venta (80mm) — usado tanto justo después de cobrar
 // (Receipt.tsx) como al reimprimir desde el historial (Ventas.tsx), para que
@@ -40,6 +40,8 @@ function esc(s: string): string {
 }
 
 export function imprimirTicket(datos: DatosTicket): void {
+  const negocio = getNegocio()
+  const documento = etiquetaDocumento(negocio)
   const lineasHtml = datos.lineas
     .map(
       (l) => `
@@ -230,7 +232,8 @@ export function imprimirTicket(datos: DatosTicket): void {
 <body>
 
   <div class="header">
-    <div class="nombre-negocio">${esc(BRAND.nombre.toUpperCase())}</div>
+    <div class="nombre-negocio">${esc(negocio.nombre.toUpperCase())}</div>
+    ${documento ? `<div class="sub-header">${esc(documento)}</div>` : ''}
     <div class="sub-header">${fechaHora(datos.fecha)}</div>
     <div class="sub-header">Cajero: ${datos.cajero ? esc(datos.cajero) : '-'}</div>
     <div class="ticket-num">Ticket N° ${datos.numero}</div>
@@ -316,6 +319,8 @@ export function imprimirTicket(datos: DatosTicket): void {
 
 /** Arma el texto plano (con formato WhatsApp `*negrita*`) del ticket. */
 export function mensajeTicketWhatsApp(datos: DatosTicket): string {
+  const negocio = getNegocio()
+  const documento = etiquetaDocumento(negocio)
   const lineas = datos.lineas
     .map(
       (l) =>
@@ -324,7 +329,8 @@ export function mensajeTicketWhatsApp(datos: DatosTicket): string {
     .join('\n')
 
   const partes = [
-    `*${BRAND.nombre}*`,
+    `*${negocio.nombre}*`,
+    ...(documento ? [documento] : []),
     `Ticket N° ${datos.numero} · ${fechaHora(datos.fecha)}`,
     '',
     lineas,

@@ -212,6 +212,16 @@ export type Egreso = {
   creado_en: string
 }
 
+export type ConfiguracionNegocio = {
+  id: number
+  nombre: string
+  /** DNI (8 dígitos) o RUC (11 dígitos); '' = sin configurar. */
+  documento: string
+  /** Imagen del QR de Yape como data URL. */
+  yape_qr: string | null
+  actualizado_en: string
+}
+
 export type ItemCarrito = {
   producto: Producto
   cantidad: number
@@ -238,6 +248,7 @@ export interface Database {
       detalle_compras: Tabla<DetalleCompra>
       mermas: Tabla<Merma>
       egresos: Tabla<Egreso>
+      configuracion_negocio: Tabla<ConfiguracionNegocio>
     }
     Views: Record<string, never>
     Functions: {

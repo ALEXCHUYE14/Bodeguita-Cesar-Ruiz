@@ -17,7 +17,7 @@ import { useClientes, DIAS_DEUDA_VENCIDA } from '@/hooks/useClientes'
 import { useAuth } from '@/context/AuthContext'
 import { useCajaCtx } from '@/context/CajaContext'
 import { ETIQUETA_METODO_EGRESO } from '@/hooks/useEgresos'
-import { BRAND } from '@/config/brand'
+import { getNegocio } from '@/config/negocio'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -156,7 +156,7 @@ export function Clientes() {
       dias >= DIAS_DEUDA_VENCIDA
         ? ` Notamos que ya pasaron ${dias} días sin un abono,`
         : ''
-    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *${BRAND.nombre}*.${aviso} Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
+    return `Hola ${c.nombre}, le recordamos que tiene una deuda pendiente de *${money(c.deuda_actual)}* en *${getNegocio().nombre}*.${aviso} Le pedimos amablemente que se acerque a cancelarla. ¡Muchas gracias! 🙏`
   }
 
   function abrirWhatsApp(c: ClienteCredito) {

@@ -3,6 +3,7 @@ import { Banknote, Smartphone, HandCoins, Check, Search } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { money, cx } from '@/utils/format'
+import { useNegocio } from '@/config/negocio'
 import type { ClienteCredito, MetodoPago } from '@/types/database'
 
 interface Props {
@@ -23,6 +24,7 @@ const METODOS: { id: MetodoPago; label: string; icon: typeof Banknote; desc: str
 const RAPIDOS = [10, 20, 50, 100, 200]
 
 export function PaymentModal({ open, onClose, total, procesando, clientes, onConfirmar }: Props) {
+  const { yapeQr } = useNegocio()
   const [metodo, setMetodo] = useState<MetodoPago>('efectivo')
   const [recibido, setRecibido] = useState('')
   const [busqCliente, setBusqCliente] = useState('')
@@ -192,6 +194,18 @@ export function PaymentModal({ open, onClose, total, procesando, clientes, onCon
             <p className="mt-0.5 text-xs text-blue-500">
               Confirma que el cliente haya completado la transferencia antes de procesar.
             </p>
+            {yapeQr && (
+              <div className="mt-3 flex flex-col items-center gap-1.5">
+                <img
+                  src={yapeQr}
+                  alt="Código QR de Yape"
+                  className="size-56 max-w-full rounded-xl bg-white object-contain p-2 shadow-sm"
+                />
+                <p className="text-xs font-medium text-blue-600">
+                  El cliente escanea este QR desde su app de Yape
+                </p>
+              </div>
+            )}
           </div>
         )}
 

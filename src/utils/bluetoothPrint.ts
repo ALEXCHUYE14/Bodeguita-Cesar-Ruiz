@@ -1,5 +1,6 @@
+import { useSyncExternalStore } from 'react'
 import { money, fechaHora } from '@/utils/format'
-import { BRAND } from '@/config/brand'
+import { getNegocio, etiquetaDocumento } from '@/config/negocio'
 import type { DatosTicket } from '@/utils/imprimirTicket'
 
 // ─── Impresión térmica directa por Bluetooth (Web Bluetooth + ESC/POS) ──────
@@ -37,18 +38,120 @@ const PERFILES_CONOCIDOS: PerfilImpresora[] = [
 
 const TODOS_LOS_SERVICIOS = PERFILES_CONOCIDOS.map((p) => p.servicio)
 
-// Recuerda el ultimo dispositivo elegido en esta pestaña/sesion para no
-// pedir "elegir dispositivo" en cada ticket — Web Bluetooth solo exige el
-// selector (con gesto del usuario) para el primer emparejamiento.
-let dispositivoRecordado: BluetoothDevice | null = null
+// ── Estado de la conexión (persistente) ──────────────────────────────────
+//
+// La impresora elegida se recuerda entre sesiones (id + nombre en
+// localStorage). Al volver a abrir la app se reconecta sola, sin selector,
+// usando navigator.bluetooth.getDevices() cuando el navegador lo permite
+// (Chrome/Edge recientes). Si no lo permite, basta con tocar "Conectar" una
+// vez por sesion — la app lo avisa con claridad.
+
+export type EstadoConexion = 'desconectada' | 'conectando' | 'conectada'
+
+export interface EstadoImpresora {
+  estado: EstadoConexion
+  /** Nombre de la impresora recordada (aunque este desconectada en este momento). */
+  nombre: string | null
+  /** Ultimo error de conexion, para mostrarlo en Configuracion. */
+  error: string | null
+}
+
+const CLAVE_IMPRESORA = 'impresora-bt-v1'
+const CLAVE_AUTO = 'impresora-bt-auto-v1'
+
+interface ImpresoraGuardada {
+  id: string
+  nombre: string | null
+}
+
+function leerGuardada(): ImpresoraGuardada | null {
+  try {
+    const raw = localStorage.getItem(CLAVE_IMPRESORA)
+    if (!raw) return null
+    const x = JSON.parse(raw) as Partial<ImpresoraGuardada>
+    return typeof x.id === 'string' && x.id ? { id: x.id, nombre: x.nombre ?? null } : null
+  } catch {
+    return null
+  }
+}
+
+function escribirGuardada(g: ImpresoraGuardada | null): void {
+  try {
+    if (g) localStorage.setItem(CLAVE_IMPRESORA, JSON.stringify(g))
+    else localStorage.removeItem(CLAVE_IMPRESORA)
+  } catch {
+    // Sin localStorage: la conexion sigue valiendo durante esta sesion.
+  }
+}
+
+let dispositivo: BluetoothDevice | null = null
+let caracteristicaActiva: BluetoothRemoteGATTCharacteristic | null = null
+
+let snapshot: EstadoImpresora = {
+  estado: 'desconectada',
+  nombre: leerGuardada()?.nombre ?? null,
+  error: null,
+}
+const oyentes = new Set<() => void>()
+
+function actualizar(parcial: Partial<EstadoImpresora>): void {
+  snapshot = { ...snapshot, ...parcial }
+  oyentes.forEach((o) => o())
+}
+
+function suscribir(cb: () => void): () => void {
+  oyentes.add(cb)
+  return () => oyentes.delete(cb)
+}
+
+function leerSnapshot(): EstadoImpresora {
+  return snapshot
+}
+
+/** Hook reactivo con el estado de la impresora Bluetooth. */
+export function useImpresoraBluetooth(): EstadoImpresora {
+  return useSyncExternalStore(suscribir, leerSnapshot, leerSnapshot)
+}
 
 export function bluetoothDisponible(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.bluetooth
 }
 
-/** Descarta el dispositivo recordado — el proximo intento pedira elegir de nuevo. */
-export function olvidarImpresoraBluetooth(): void {
-  dispositivoRecordado = null
+/** ¿Hay una impresora recordada de una sesion anterior (o de esta)? */
+export function hayImpresoraGuardada(): boolean {
+  return leerGuardada() !== null
+}
+
+/** Impresion automatica al cobrar — preferencia por dispositivo (cada caja/celular decide). */
+export function autoImprimirActivo(): boolean {
+  try {
+    return localStorage.getItem(CLAVE_AUTO) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function fijarAutoImprimir(valor: boolean): void {
+  try {
+    if (valor) localStorage.setItem(CLAVE_AUTO, '1')
+    else localStorage.removeItem(CLAVE_AUTO)
+  } catch {
+    // Ver escribirGuardada().
+  }
+}
+
+function alDesconectarse(): void {
+  caracteristicaActiva = null
+  if (snapshot.estado !== 'desconectada') actualizar({ estado: 'desconectada' })
+}
+
+function adoptarDispositivo(device: BluetoothDevice): void {
+  if (dispositivo && dispositivo !== device) {
+    dispositivo.removeEventListener('gattserverdisconnected', alDesconectarse)
+  }
+  dispositivo = device
+  device.removeEventListener('gattserverdisconnected', alDesconectarse)
+  device.addEventListener('gattserverdisconnected', alDesconectarse)
 }
 
 // ── Codificación ESC/POS ─────────────────────────────────────────────────
@@ -78,21 +181,55 @@ function fila(izq: string, der: string, ancho: number): string {
   return i + ' '.repeat(ancho - i.length - d.length) + d
 }
 
+/** Parte un texto largo en lineas de a lo sumo `ancho` caracteres, cortando por palabras. */
+function partirEnLineas(texto: string, ancho: number): string[] {
+  const lineas: string[] = []
+  let actualLinea = ''
+  for (const palabra of quitarAcentos(texto).split(/\s+/).filter(Boolean)) {
+    let p = palabra
+    while (p.length > ancho) {
+      if (actualLinea) {
+        lineas.push(actualLinea)
+        actualLinea = ''
+      }
+      lineas.push(p.slice(0, ancho))
+      p = p.slice(ancho)
+    }
+    if (!actualLinea) actualLinea = p
+    else if (actualLinea.length + 1 + p.length <= ancho) actualLinea += ' ' + p
+    else {
+      lineas.push(actualLinea)
+      actualLinea = p
+    }
+  }
+  if (actualLinea) lineas.push(actualLinea)
+  return lineas.length ? lineas : ['']
+}
+
 /** Arma los bytes ESC/POS del ticket. `ancho` = columnas de texto (32 = seguro para impresoras de 58mm y 80mm). */
 function construirEscPos(datos: DatosTicket, ancho = 32): Uint8Array {
   const out: number[] = []
   const cmd = (...bytes: number[]) => out.push(...bytes)
   const linea = (s: string) => {
     const t = quitarAcentos(s)
-    for (let i = 0; i < t.length; i++) out.push(t.charCodeAt(i) & 0xff)
+    for (let i = 0; i < t.length; i++) {
+      const c = t.charCodeAt(i)
+      // Solo ASCII imprimible: cualquier otro caracter (emoji, simbolos) saldria
+      // como basura en la pagina de codigos de la impresora.
+      out.push(c >= 0x20 && c <= 0x7e ? c : 0x3f)
+    }
     out.push(0x0a)
   }
+
+  const negocio = getNegocio()
+  const documento = etiquetaDocumento(negocio)
 
   cmd(ESC, 0x40) // inicializa la impresora
   cmd(ESC, 0x61, 0x01) // centrado
   cmd(ESC, 0x45, 0x01) // negrita on
-  linea(BRAND.nombre.toUpperCase())
+  for (const l of partirEnLineas(negocio.nombre.toUpperCase(), ancho)) linea(l)
   cmd(ESC, 0x45, 0x00) // negrita off
+  if (documento) linea(documento)
   linea(fechaHora(datos.fecha))
   linea(`Cajero: ${datos.cajero ?? '-'}`)
   linea(`Ticket N ${datos.numero}`)
@@ -138,7 +275,7 @@ function construirEscPos(datos: DatosTicket, ancho = 32): Uint8Array {
 
 // ── Conexión y envío ─────────────────────────────────────────────────────
 
-async function conectarCaracteristica(device: BluetoothDevice): Promise<BluetoothRemoteGATTCharacteristic> {
+async function resolverCaracteristica(device: BluetoothDevice): Promise<BluetoothRemoteGATTCharacteristic> {
   if (!device.gatt) {
     throw new Error('Este dispositivo no expone GATT: no parece ser una impresora Bluetooth compatible.')
   }
@@ -175,36 +312,203 @@ async function escribirEnPartes(caracteristica: BluetoothRemoteGATTCharacteristi
   }
 }
 
+// Serializa todo lo que toca la impresora (conectar/imprimir): un doble toque
+// en "Imprimir" no debe mezclar dos tickets ni abrir dos conexiones a la vez.
+let cola: Promise<unknown> = Promise.resolve()
+function enCola<T>(tarea: () => Promise<T>): Promise<T> {
+  const siguiente = cola.then(tarea, tarea)
+  cola = siguiente.catch(() => undefined)
+  return siguiente
+}
+
+function mensajeError(e: unknown, porDefecto: string): string {
+  if (e instanceof DOMException && e.name === 'NotFoundError') {
+    return 'No se seleccionó ninguna impresora.'
+  }
+  return e instanceof Error && e.message ? e.message : porDefecto
+}
+
+/** Conecta el dispositivo dado y deja lista la caracteristica de escritura. */
+async function establecer(device: BluetoothDevice): Promise<BluetoothRemoteGATTCharacteristic> {
+  adoptarDispositivo(device)
+  actualizar({ estado: 'conectando', error: null, nombre: device.name ?? snapshot.nombre })
+  try {
+    const car = await resolverCaracteristica(device)
+    caracteristicaActiva = car
+    escribirGuardada({ id: device.id, nombre: device.name ?? null })
+    actualizar({ estado: 'conectada', nombre: device.name ?? snapshot.nombre, error: null })
+    return car
+  } catch (e) {
+    caracteristicaActiva = null
+    try {
+      device.gatt?.disconnect()
+    } catch {
+      // ya estaba desconectado
+    }
+    actualizar({ estado: 'desconectada', error: mensajeError(e, 'No se pudo conectar con la impresora.') })
+    throw e
+  }
+}
+
+/** Busca entre los dispositivos ya autorizados el que coincide con la impresora recordada. */
+async function buscarAutorizada(): Promise<BluetoothDevice | null> {
+  const guardada = leerGuardada()
+  if (!guardada || !navigator.bluetooth?.getDevices) return null
+  try {
+    const lista = await navigator.bluetooth.getDevices()
+    return lista.find((d) => d.id === guardada.id) ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
- * Imprime el ticket directo en una impresora térmica Bluetooth (BLE).
- * Debe llamarse desde un gesto directo del usuario (onClick) la primera vez:
- * el navegador exige eso para mostrar el selector de dispositivos.
+ * Obtiene una caracteristica lista para escribir, en este orden:
+ *  1. la conexion que ya esta abierta,
+ *  2. reconectar la impresora recordada (sin selector),
+ *  3. abrir el selector del navegador — solo si `permitirSelector` y no hay
+ *     ninguna impresora recordada. Requiere gesto directo del usuario.
  */
-export async function imprimirPorBluetooth(datos: DatosTicket): Promise<void> {
+async function obtenerCaracteristica(permitirSelector: boolean): Promise<BluetoothRemoteGATTCharacteristic> {
+  if (caracteristicaActiva && dispositivo?.gatt?.connected) return caracteristicaActiva
+
+  const recordada = dispositivo ?? (await buscarAutorizada())
+  if (recordada) {
+    try {
+      return await establecer(recordada)
+    } catch (e) {
+      const nombre = recordada.name ?? snapshot.nombre ?? 'la impresora'
+      throw new Error(
+        `No se pudo conectar con ${nombre}. Verifica que esté encendida y cerca; si sigue fallando, ` +
+          `entra a Configuración y vuelve a conectarla. (${mensajeError(e, 'error desconocido')})`,
+      )
+    }
+  }
+
+  if (!permitirSelector) {
+    throw new Error(
+      hayImpresoraGuardada()
+        ? 'Este navegador no puede reconectar la impresora automáticamente. Toca "Bluetooth" en el ticket o conéctala en Configuración.'
+        : 'No hay una impresora Bluetooth conectada. Conéctala en Configuración.',
+    )
+  }
+
+  const elegido = await navigator.bluetooth!.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: TODOS_LOS_SERVICIOS,
+  })
+  return establecer(elegido)
+}
+
+function exigirBluetooth(): void {
   if (!bluetoothDisponible()) {
     throw new Error(
       'Este navegador no admite impresión Bluetooth directa (funciona en Chrome/Edge en Android o PC, no en ' +
         'Safari/iPhone/iPad). Usa "Imprimir ticket" como alternativa.',
     )
   }
+}
 
-  let device = dispositivoRecordado
-  if (!device) {
-    device = await navigator.bluetooth!.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: TODOS_LOS_SERVICIOS,
-    })
-  }
-
+/** Escribe en la impresora; si el enlace se cayo, reconecta y reintenta una vez. */
+async function enviar(bytes: Uint8Array, permitirSelector: boolean): Promise<void> {
+  let car = await obtenerCaracteristica(permitirSelector)
   try {
-    const caracteristica = await conectarCaracteristica(device)
-    const bytes = construirEscPos(datos)
-    await escribirEnPartes(caracteristica, bytes)
-    // Recien se recuerda si la impresion funciono: asi un dispositivo
-    // incompatible nunca queda guardado bloqueando los siguientes intentos.
-    dispositivoRecordado = device
-  } catch (e) {
-    dispositivoRecordado = null
-    throw e
+    await escribirEnPartes(car, bytes)
+  } catch {
+    // El enlace pudo caerse entre tickets: se reconecta (sin selector) y se reintenta una vez.
+    caracteristicaActiva = null
+    car = await obtenerCaracteristica(false)
+    await escribirEnPartes(car, bytes)
   }
+}
+
+/**
+ * Abre el selector del navegador y conecta la impresora. Debe llamarse desde
+ * un gesto directo del usuario (onClick). Queda recordada para proximas
+ * sesiones. Si ya hay una recordada, intenta reconectarla primero.
+ */
+export function conectarImpresora(): Promise<void> {
+  try {
+    exigirBluetooth()
+  } catch (e) {
+    return Promise.reject(e)
+  }
+  return enCola(async () => {
+    try {
+      await obtenerCaracteristica(true)
+    } catch (e) {
+      const mensaje = mensajeError(e, 'No se pudo conectar con la impresora.')
+      actualizar({ estado: 'desconectada', error: mensaje })
+      throw new Error(mensaje)
+    }
+  })
+}
+
+/**
+ * Reconecta en silencio la impresora recordada (sin selector). No lanza:
+ * devuelve true si quedo conectada. Pensado para llamarse al abrir la pantalla
+ * de Configuracion.
+ */
+export async function reconectarImpresoraGuardada(): Promise<boolean> {
+  if (!bluetoothDisponible() || !hayImpresoraGuardada()) return false
+  if (caracteristicaActiva && dispositivo?.gatt?.connected) return true
+  try {
+    await enCola(() => obtenerCaracteristica(false))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Desconecta y olvida la impresora: la proxima vez habra que elegirla de nuevo. */
+export function desconectarImpresora(): void {
+  try {
+    dispositivo?.gatt?.disconnect()
+  } catch {
+    // ya estaba desconectada
+  }
+  if (dispositivo) dispositivo.removeEventListener('gattserverdisconnected', alDesconectarse)
+  dispositivo = null
+  caracteristicaActiva = null
+  escribirGuardada(null)
+  actualizar({ estado: 'desconectada', nombre: null, error: null })
+}
+
+/**
+ * Imprime el ticket directo en la impresora termica Bluetooth (BLE).
+ * Con `permitirSelector: true` (por defecto) puede abrir el selector de
+ * dispositivos si no hay impresora recordada — en ese caso debe llamarse
+ * desde un gesto directo del usuario. La impresion automatica usa `false`.
+ */
+export function imprimirPorBluetooth(
+  datos: DatosTicket,
+  opciones: { permitirSelector?: boolean } = {},
+): Promise<void> {
+  try {
+    exigirBluetooth()
+  } catch (e) {
+    return Promise.reject(e)
+  }
+  const permitirSelector = opciones.permitirSelector ?? true
+  return enCola(() => enviar(construirEscPos(datos), permitirSelector))
+}
+
+/** Ticket de prueba para verificar la conexion y ver como sale el encabezado del negocio. */
+export function imprimirPruebaBluetooth(): Promise<void> {
+  return imprimirPorBluetooth({
+    numero: 0,
+    fecha: new Date().toISOString(),
+    cajero: 'Prueba',
+    lineas: [
+      { etiquetaCantidad: '1x', nombre: 'Producto de prueba A', monto: 10 },
+      { etiquetaCantidad: '2x', nombre: 'Producto de prueba B', monto: 25.5 },
+    ],
+    subtotal: 30.08,
+    descuento: 0,
+    igv: 5.42,
+    total: 35.5,
+    metodoPagoEtiqueta: 'Efectivo',
+    pagoRecibido: 40,
+    vuelto: 4.5,
+  })
 }

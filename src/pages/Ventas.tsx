@@ -12,7 +12,7 @@ import {
   Bluetooth,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { BRAND } from '@/config/brand'
+import { getNegocio, useNegocio, etiquetaDocumento } from '@/config/negocio'
 import { useAuth } from '@/context/AuthContext'
 import { useCajaCtx } from '@/context/CajaContext'
 import { Card, Badge, Button, Spinner } from '@/components/ui/Button'
@@ -359,7 +359,7 @@ export function Ventas() {
 
   function exportarCSV() {
     const filas: (string | number)[][] = [
-      [`Reporte de ventas — ${BRAND.nombre}`],
+      [`Reporte de ventas — ${getNegocio().nombre}`],
       [`Periodo: ${fechaCorta(`${desde}T00:00:00`)} al ${fechaCorta(`${hasta}T00:00:00`)}`],
       [`Generado: ${fechaHora(new Date().toISOString())}`],
       [],
@@ -819,6 +819,8 @@ function TicketReprint({
   onAnulada: () => void
 }) {
   const toast = useToast()
+  const negocio = useNegocio()
+  const documentoNegocio = etiquetaDocumento(negocio)
   const [detalle, setDetalle] = useState<DetalleVenta[]>([])
   const [cargando, setCargando] = useState(false)
   const [anulando, setAnulando] = useState(false)
@@ -960,7 +962,8 @@ function TicketReprint({
         className="rounded-xl border border-dashed border-ink-200 p-4 font-sans text-sm"
       >
         <div className="mb-3 text-center">
-          <p className="font-display text-base font-bold">{BRAND.nombre.toUpperCase()}</p>
+          <p className="font-display text-base font-bold">{negocio.nombre.toUpperCase()}</p>
+          {documentoNegocio && <p className="text-xs text-ink-400">{documentoNegocio}</p>}
           <p className="text-xs text-ink-400">{fechaHora(venta.creado_en)}</p>
           <p className="text-xs text-ink-400">Cajero: {venta.cajero_nombre ?? '-'}</p>
           <p className="text-xs text-ink-400">Comprobante #{venta.numero}</p>

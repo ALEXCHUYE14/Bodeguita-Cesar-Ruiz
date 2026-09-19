@@ -20,6 +20,7 @@ import { supabase } from '@/lib/supabase'
 import { useCajaCtx } from '@/context/CajaContext'
 import { useAuth } from '@/context/AuthContext'
 import { BRAND } from '@/config/brand'
+import { getNegocio, etiquetaDocumento } from '@/config/negocio'
 import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
@@ -139,6 +140,14 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
     const diferenciaFondo = diferencia >= 0 ? '#ecfdf5' : '#fef2f2'
     const diferenciaBorde = diferencia >= 0 ? '#a7f3d0' : '#fecaca'
 
+    const negocio = getNegocio()
+    // El nombre lo escribe el usuario: se escapa antes de meterlo en el HTML del reporte.
+    const nombreNegocio = negocio.nombre
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+    const documentoNegocio = etiquetaDocumento(negocio)
     const logoUrl = `${window.location.origin}/img/logo.png`
     const ahora   = new Date().toISOString()
 
@@ -212,7 +221,7 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
 <html lang="es">
 <head>
   <meta charset="UTF-8"/>
-  <title>Cierre de Caja — ${BRAND.nombre}</title>
+  <title>Cierre de Caja — ${nombreNegocio}</title>
   <style>
     *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
     body { font-family:'Helvetica Neue',Arial,sans-serif; font-size:10pt; color:#1a1a1a; background:#fff; padding:18mm 16mm 20mm; }
@@ -270,10 +279,10 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
 <body>
   <div class="header">
     <div class="header-left">
-      <img src="${logoUrl}" class="logo" alt="${BRAND.nombre}" onerror="this.style.display='none'"/>
+      <img src="${logoUrl}" class="logo" alt="${nombreNegocio}" onerror="this.style.display='none'"/>
       <div>
-        <div class="store-name">${BRAND.nombre.toUpperCase()}</div>
-        <div class="store-sub">Sistema de Gestion Comercial · Reporte Interno</div>
+        <div class="store-name">${nombreNegocio.toUpperCase()}</div>
+        <div class="store-sub">${documentoNegocio ? `${documentoNegocio} · ` : ''}Sistema de Gestion Comercial · Reporte Interno</div>
       </div>
     </div>
     <div class="report-info">
@@ -319,7 +328,7 @@ async function generarReportePDF(cajaData: CajaRegistro, montoRealContado: numbe
       <div class="balance-value">${diferencia >= 0 ? '+' : ''}${money(diferencia)}</div>
     </div>
   </div>
-  <div class="footer">${BRAND.nombre} &nbsp;·&nbsp; Reporte generado el ${fechaHora(ahora)} &nbsp;·&nbsp; Documento de uso interno</div>
+  <div class="footer">${nombreNegocio} &nbsp;·&nbsp; Reporte generado el ${fechaHora(ahora)} &nbsp;·&nbsp; Documento de uso interno</div>
 </body>
 </html>`
 

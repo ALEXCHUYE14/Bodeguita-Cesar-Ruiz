@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Printer, Check, MessageCircle, Bluetooth } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
@@ -10,8 +10,8 @@ import {
   type LineaTicket,
   type DatosTicket,
 } from '@/utils/imprimirTicket'
-import { imprimirPorBluetooth, bluetoothDisponible } from '@/utils/bluetoothPrint'
-import { BRAND } from '@/config/brand'
+import { imprimirPorBluetooth, bluetoothDisponible, autoImprimirActivo } from '@/utils/bluetoothPrint'
+import { useNegocio, etiquetaDocumento } from '@/config/negocio'
 import type { ItemCarrito, Venta } from '@/types/database'
 
 const ETIQUETA: Record<string, string> = {
@@ -53,6 +53,8 @@ interface Props {
 
 export function Receipt({ open, onClose, venta, items }: Props) {
   const toast = useToast()
+  const negocio = useNegocio()
+  const documentoNegocio = etiquetaDocumento(negocio)
   const [waAbierto, setWaAbierto] = useState(false)
   const [telWA, setTelWA] = useState('')
   const [btImprimiendo, setBtImprimiendo] = useState(false)
@@ -75,6 +77,24 @@ export function Receipt({ open, onClose, venta, items }: Props) {
       clienteNombre: venta.cliente_nombre,
     }
   }
+
+  // Impresion automatica al cobrar (opcional, se activa en Configuracion): solo
+  // si esta dispositivo tiene una impresora Bluetooth recordada. Nunca abre el
+  // selector (no hay gesto del usuario en este momento); si falla, avisa y el
+  // cajero puede usar los botones manuales.
+  const autoImpresa = useRef<string | null>(null)
+  useEffect(() => {
+    if (autoImpresa.current === venta.id) return
+    autoImpresa.current = venta.id
+    if (!bluetoothDisponible() || !autoImprimirActivo()) return
+    imprimirPorBluetooth(datosTicket(), { permitirSelector: false })
+      .then(() => toast.exito('Ticket impreso'))
+      .catch((e) =>
+        toast.error(e instanceof Error ? e.message : 'No se pudo imprimir automáticamente'),
+      )
+    // Solo al mostrarse el comprobante de esta venta.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venta.id])
 
   function imprimir() {
     imprimirTicket(datosTicket())
@@ -139,7 +159,8 @@ export function Receipt({ open, onClose, venta, items }: Props) {
       <div className="rounded-xl border border-dashed border-ink-200 bg-white p-4 font-mono text-[0.75rem] leading-relaxed">
         {/* Cabecera */}
         <div className="mb-2 text-center">
-          <p className="text-sm font-black tracking-wide">{BRAND.nombre.toUpperCase()}</p>
+          <p className="text-sm font-black tracking-wide">{negocio.nombre.toUpperCase()}</p>
+          {documentoNegocio && <p className="text-ink-400 text-[0.7rem]">{documentoNegocio}</p>}
           <p className="text-ink-400 text-[0.7rem]">{fechaHora(venta.creado_en)}</p>
           <p className="text-ink-400 text-[0.7rem]">Cajero: {venta.cajero_nombre ?? '-'}</p>
           <p className="font-bold text-[0.75rem]">Ticket N° {venta.numero}</p>

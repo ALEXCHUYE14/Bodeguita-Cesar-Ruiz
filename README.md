@@ -25,6 +25,7 @@ Sistema de punto de venta y gestion en tiempo real para bodega/minimarket, const
 2. Anota la contrasena de la base de datos que definas.
 3. Cuando el proyecto este listo, ve a **SQL Editor** y abre una nueva consulta.
 4. Copia **todo** el contenido de `supabase/schema.sql` y ejecutalo. Esto crea las tablas, funciones (`registrar_venta`, `ajustar_stock`, `anular_venta`), politicas de seguridad (RLS), publicaciones de Realtime y datos de ejemplo.
+5. **Si tu base ya existia antes de la seccion Configuracion > Datos del negocio** (nombre, DNI/RUC, QR de Yape), ejecuta ademas `supabase/add_configuracion_negocio.sql`. Es seguro correrlo mas de una vez y no toca datos existentes.
 
 ## 2. Configurar las variables de entorno
 

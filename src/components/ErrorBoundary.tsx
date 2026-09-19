@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
-import { BRAND } from '@/config/brand'
+import { getNegocio } from '@/config/negocio'
 
 interface Props {
   children: ReactNode
@@ -40,7 +40,7 @@ export class ErrorBoundary extends Component<Props, State> {
             Algo salió mal
           </h1>
           <p className="mt-1.5 text-sm text-ink-500">
-            {BRAND.nombre} encontró un error inesperado. Recarga la página; si
+            {getNegocio().nombre} encontró un error inesperado. Recarga la página; si
             el problema continúa, contacta a soporte.
           </p>
           <p className="mt-3 rounded-lg bg-ink-50 px-3 py-2 text-left text-xs text-ink-400">

@@ -23,7 +23,8 @@ declare global {
     getPrimaryService(service: string): Promise<BluetoothRemoteGATTService>
   }
 
-  interface BluetoothDevice {
+  interface BluetoothDevice extends EventTarget {
+    id: string
     name?: string
     gatt?: BluetoothRemoteGATTServer
   }
@@ -36,6 +37,8 @@ declare global {
 
   interface Bluetooth {
     requestDevice(options?: BluetoothRequestDeviceOptions): Promise<BluetoothDevice>
+    /** Dispositivos ya autorizados antes (Chrome 85+; en algunas versiones requiere activar un flag). */
+    getDevices?(): Promise<BluetoothDevice[]>
   }
 
   interface Navigator {

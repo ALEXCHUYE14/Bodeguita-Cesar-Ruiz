@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext'
 import { useToast } from '@/components/ui/Toast'
 import { supabase } from '@/lib/supabase'
 import { BRAND } from '@/config/brand'
+import { useNegocio } from '@/config/negocio'
 import { cx, ymd } from '@/utils/format'
 import { tieneAcceso } from '@/utils/roles'
 
@@ -40,6 +41,7 @@ function useAvisoStockBajo() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { perfil, signOut } = useAuth()
+  const { nombre: nombreNegocio } = useNegocio()
   const navigate = useNavigate()
   const items = NAV.filter((i) => tieneAcceso(perfil?.rol, i.minRol))
   useAvisoStockBajo()
@@ -65,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Store className="size-5" />
           </div>
           <div className="leading-tight">
-            <p className="font-display text-[0.95rem] font-bold text-ink-900">{BRAND.nombre}</p>
+            <p className="font-display text-[0.95rem] font-bold text-ink-900">{nombreNegocio}</p>
             <p className="text-[0.7rem] font-medium text-ink-400">Gestion Comercial</p>
           </div>
         </div>
@@ -120,7 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="grid size-8 place-items-center rounded-lg bg-ink-900 text-white">
             <Store className="size-[18px]" />
           </div>
-          <span className="font-display text-base font-bold text-ink-900">{BRAND.nombre}</span>
+          <span className="font-display text-base font-bold text-ink-900">{nombreNegocio}</span>
         </div>
         <button
           onClick={salir}

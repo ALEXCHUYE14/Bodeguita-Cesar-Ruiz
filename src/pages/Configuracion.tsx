@@ -4,7 +4,9 @@ import { Card, Button, Badge, Spinner } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/context/AuthContext'
 import { supabase } from '@/lib/supabase'
-import { BRAND } from '@/config/brand'
+import { DatosNegocio } from '@/components/settings/DatosNegocio'
+import { ImpresoraBluetooth } from '@/components/settings/ImpresoraBluetooth'
+import { useNegocio, getNegocio, etiquetaDocumento } from '@/config/negocio'
 import { cx } from '@/utils/format'
 import type { Perfil, Rol } from '@/types/database'
 
@@ -131,6 +133,7 @@ function GestionUsuarios() {
 }
 
 export function Configuracion() {
+  const nombreNegocio = useNegocio().nombre
   const [estadoImpresion, setEstadoImpresion] = useState<'idle' | 'ok' | 'error'>('idle')
 
   function probarImpresion() {
@@ -140,6 +143,13 @@ export function Configuracion() {
       return
     }
 
+    const negocio = getNegocio()
+    const documento = etiquetaDocumento(negocio)
+    // El nombre lo escribe el usuario: se escapa antes de insertarlo en el HTML.
+    const nombreHtml = negocio.nombre
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
     const ahora = new Date().toLocaleString('es-PE', {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -161,14 +171,15 @@ export function Configuracion() {
   </style>
 </head>
 <body>
-  <div class="center bold" style="font-size:14px;margin-bottom:4px;">${BRAND.nombre.toUpperCase()}</div>
+  <div class="center bold" style="font-size:14px;margin-bottom:4px;">${nombreHtml.toUpperCase()}</div>
+  ${documento ? `<div class="center" style="font-size:10px;">${documento}</div>` : ''}
   <div class="center" style="font-size:10px;margin-bottom:8px;">Sistema de Gestión Comercial</div>
   <div class="line"></div>
   <div class="center bold" style="margin:6px 0;">*** TICKET DE PRUEBA ***</div>
   <div class="line"></div>
   <div style="margin:6px 0;">
     <div class="row"><span>Fecha/Hora:</span><span>${ahora}</span></div>
-    <div class="row"><span>Sistema:</span><span>${BRAND.nombre}</span></div>
+    <div class="row"><span>Sistema:</span><span>${nombreHtml}</span></div>
     <div class="row"><span>Estado:</span><span>Operativo</span></div>
   </div>
   <div class="line"></div>
@@ -202,15 +213,21 @@ export function Configuracion() {
         <p className="text-sm text-ink-400">Ajustes del sistema y herramientas de diagnóstico</p>
       </div>
 
+      {/* Sección: Datos del negocio (nombre, DNI/RUC, QR de Yape) */}
+      <DatosNegocio />
+
       {/* Sección: Usuarios y roles */}
       <GestionUsuarios />
 
-      {/* Sección: Impresora */}
+      {/* Sección: Impresora Bluetooth directa */}
+      <ImpresoraBluetooth />
+
+      {/* Sección: Impresión con el diálogo del sistema */}
       <Card className="overflow-hidden">
         <div className="border-b border-ink-100 px-5 py-4">
-          <h2 className="font-display font-bold text-ink-900">Impresora de tickets</h2>
+          <h2 className="font-display font-bold text-ink-900">Impresión con diálogo del sistema</h2>
           <p className="mt-0.5 text-sm text-ink-400">
-            Prueba la conexión con tu impresora térmica o Bluetooth
+            Alternativa para cualquier impresora instalada en el equipo (USB, red o Bluetooth clásico)
           </p>
         </div>
         <div className="space-y-4 p-5">
@@ -257,7 +274,7 @@ export function Configuracion() {
         </div>
         <div className="divide-y divide-ink-50">
           {[
-            { k: 'Aplicación', v: `${BRAND.nombre} POS` },
+            { k: 'Aplicación', v: `${nombreNegocio} POS` },
             { k: 'Versión', v: import.meta.env.VITE_APP_VERSION ?? '1.0.0' },
             { k: 'Entorno', v: import.meta.env.MODE === 'production' ? 'Producción' : 'Desarrollo' },
             { k: 'Navegador', v: navigator.userAgent.split(' ').slice(-2).join(' ') },

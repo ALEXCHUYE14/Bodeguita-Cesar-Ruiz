@@ -21,6 +21,7 @@ import { Rentabilidad } from '@/pages/Rentabilidad'
 import { Configuracion } from '@/pages/Configuracion'
 import { tieneAcceso } from '@/utils/roles'
 import { desbloquearAudioEscaner } from '@/utils/beep'
+import { cargarNegocio } from '@/config/negocio'
 import type { Rol } from '@/types/database'
 import type { ReactNode } from 'react'
 
@@ -46,6 +47,16 @@ function SoloRol({ minRol, children }: { minRol: Rol; children: ReactNode }) {
   if (cargando) return <Cargando />
   if (!tieneAcceso(perfil?.rol, minRol)) return <Navigate to="/pos" replace />
   return <>{children}</>
+}
+
+/** Trae los datos del negocio (nombre, DNI/RUC, QR de Yape) al iniciar sesión. */
+function SincronizarNegocio() {
+  const { session } = useAuth()
+  const usuarioId = session?.user.id
+  useEffect(() => {
+    if (usuarioId) void cargarNegocio()
+  }, [usuarioId])
+  return null
 }
 
 function Rutas() {
@@ -202,6 +213,7 @@ export default function App() {
         <CajaProvider>
           <CarritoProvider>
             <ToastProvider>
+              <SincronizarNegocio />
               <Rutas />
             </ToastProvider>
           </CarritoProvider>

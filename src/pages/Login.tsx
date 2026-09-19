@@ -3,8 +3,7 @@ import { Eye, EyeOff, LogIn, MessageCircle } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
 import { BRAND } from '@/config/brand'
-
-const WA_SOPORTE = `https://wa.me/${BRAND.whatsappSoporte}?text=Hola,%20tengo%20problemas%20para%20acceder%20al%20sistema%20de%20${encodeURIComponent(BRAND.nombre)}.`
+import { useNegocio } from '@/config/negocio'
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Propiedades CSS de la columna izquierda (imagen de fondo).
@@ -23,6 +22,8 @@ const leftColBgStyle: React.CSSProperties = {
 
 export function Login() {
   const { signIn } = useAuth()
+  const { nombre: nombreNegocio } = useNegocio()
+  const WA_SOPORTE = `https://wa.me/${BRAND.whatsappSoporte}?text=Hola,%20tengo%20problemas%20para%20acceder%20al%20sistema%20de%20${encodeURIComponent(nombreNegocio)}.`
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [verPass, setVerPass] = useState(false)
@@ -81,7 +82,7 @@ export function Login() {
             textShadow: '0 2px 12px rgba(0,0,0,0.4)',
             margin: 0,
           }}>
-            {BRAND.nombre}
+            {nombreNegocio}
           </h2>
           <p style={{ marginTop: '10px', fontSize: '1rem', opacity: 0.7, fontWeight: 500 }}>
             Sistema de Gestión y Punto de Venta
@@ -159,7 +160,7 @@ export function Login() {
             <div style={{ textAlign: 'center', marginBottom: '20px' }}>
               <img
                 src="/img/logo.png"
-                alt={BRAND.nombre}
+                alt={nombreNegocio}
                 style={{
                   maxHeight: '80px',
                   width: 'auto',
@@ -183,7 +184,7 @@ export function Login() {
                 color: '#0e0e0d',
                 margin: '0 0 6px 0',
               }}>
-                {BRAND.nombre}
+                {nombreNegocio}
               </h1>
               <p style={{ fontSize: '0.875rem', color: '#888', margin: 0 }}>
                 Ingresa tus credenciales para continuar
@@ -290,7 +291,7 @@ export function Login() {
             Contactar soporte por WhatsApp
           </a>
           <p style={{ marginTop: '12px', fontSize: '0.7rem', color: '#bbb' }}>
-            Acceso exclusivo para personal autorizado · {BRAND.nombre}
+            Acceso exclusivo para personal autorizado · {nombreNegocio}
           </p>
         </div>
       </div>
