@@ -23,19 +23,20 @@ import { Button, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { CameraScanner } from '@/components/pos/CameraScanner'
-import { PaymentModal } from '@/components/pos/PaymentModal'
+import { PaymentModal, type PagoLeg } from '@/components/pos/PaymentModal'
 import { Receipt } from '@/components/pos/Receipt'
 import { money, cx, cantidad, etiquetaUnidad } from '@/utils/format'
 import { BRAND } from '@/config/brand'
 import { beepExito, beepError } from '@/utils/beep'
-import type { ItemCarrito, MetodoPago, ModalidadVenta, Producto, Venta } from '@/types/database'
+import { resolverPresentacion, presentacionesDisponibles, maxCantidadPresentacion } from '@/utils/presentaciones'
+import type { ItemCarrito, ModalidadVenta, Producto, Venta } from '@/types/database'
 
 export function POS() {
   const { productos, categorias, cargando } = useProductos()
-  const { clientes } = useClientes()
+  const { clientes, crear: crearCliente } = useClientes()
   const { perfil } = useAuth()
   const nombreDisplay = perfil?.rol === 'administrador' ? BRAND.operador : (perfil?.nombre?.split(' ')[0] ?? 'Cajero')
-  const { caja, cargando: cajaCargando, abrir: abrirCaja, reflejarVentaLocal } = useCajaCtx()
+  const { caja, cargando: cajaCargando, abrir: abrirCaja, reflejarVentaLocal, recargar: recargarCaja } = useCajaCtx()
   const toast = useToast()
   // Vive en un Provider en la raiz de la app (ver App.tsx / CarritoContext),
   // no como estado local de esta pagina: asi el carrito sobrevive si el
@@ -55,11 +56,34 @@ export function POS() {
   const [abriendoCaja, setAbriendoCaja] = useState(false)
   const [granelSel, setGranelSel] = useState<Producto | null>(null)
   const [cantGranel, setCantGranel] = useState('1')
+  // Selector de presentacion — se abre cuando un producto tiene 2 o mas
+  // formas de venderse (ej. Caja + una presentacion flexible, o varios
+  // niveles de empaque) y una tarjeta con 2 botones ya no alcanza.
+  const [presentacionSel, setPresentacionSel] = useState<Producto | null>(null)
 
   // Nadie puede vender sin caja abierta (antes el admin quedaba exento, lo
   // que permitia registrar ventas con caja_id null: no aparecian en ningun
   // cuadre/cierre de caja).
   const necesitaCaja = !cajaCargando && !caja
+
+  // El carrito se restaura de localStorage al instante (ver useCarrito.ts),
+  // con los productos tal como estaban guardados — puede estar desactualizado
+  // si paso tiempo entre la caida/recarga y volver a abrir la app. En cuanto
+  // el catalogo real termina de cargar (o cambia por realtime), se refresca
+  // cada item contra el; lo que ya no existe/no tiene stock se quita solo.
+  useEffect(() => {
+    if (productos.length === 0) return
+    const { eliminados, reducidos } = carrito.reconciliar(productos)
+    if (eliminados.length > 0) {
+      toast.error(`Se quitaron del carrito (ya no disponibles): ${eliminados.join(', ')}`)
+    }
+    if (reducidos.length > 0) {
+      toast.error(`Se ajusto la cantidad en el carrito (stock insuficiente): ${reducidos.join(', ')}`)
+    }
+    // Solo cuando cambia el catalogo (carga inicial o realtime) — no en cada
+    // cambio del carrito, para no recalcular en cada click del cajero.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productos])
 
   // --- Manejo de escaneo (camara o lector fisico) ---
   const onScan = useCallback(
@@ -107,6 +131,20 @@ export function POS() {
     setGranelSel(null)
   }
 
+  // --- Productos con 2+ presentaciones: eligen en una hoja en vez de
+  // amontonar botones en la tarjeta ---
+  function elegirPresentacion(p: Producto, modalidad: ModalidadVenta) {
+    if (modalidad === 'unidad' && p.tipo_venta === 'granel') {
+      setPresentacionSel(null)
+      abrirGranel(p)
+      return
+    }
+    carrito.agregar(p, modalidad)
+    const opcion = presentacionesDisponibles(p).find((o) => o.modalidad === modalidad)
+    toast.exito(`+ ${opcion?.etiqueta ?? 'Unidad'} de ${p.nombre}`)
+    setPresentacionSel(null)
+  }
+
   const filtrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase()
     return productos.filter((p) => {
@@ -138,7 +176,7 @@ export function POS() {
     }
   }
 
-  async function cobrar(metodo: MetodoPago, pagoRecibido: number, clienteId?: string) {
+  async function cobrar(pagos: PagoLeg[], clienteId?: string) {
     // Defensa adicional: si por cualquier motivo se llega aqui sin caja
     // abierta (p.ej. se cerro en otra pestaña mientras se armaba el carrito),
     // no se registra la venta sin caja.
@@ -157,22 +195,30 @@ export function POS() {
         // del producto (no confia en un total pre-calculado enviado por el cliente).
         modalidad: i.modalidad,
       }))
+      // Un solo metodo o pago mixto (2+ filas) se mandan igual, como un
+      // arreglo de "piernas" de pago — el RPC valida que cubran el total y
+      // decide si la venta queda como un metodo unico o "mixto".
       const { data, error } = await supabase.rpc('registrar_venta', {
         p_items: items,
-        p_metodo: metodo,
         p_descuento: carrito.descuento,
-        p_pago_recibido: pagoRecibido,
         p_caja_id: caja?.id ?? null,
         p_cliente_id: clienteId ?? null,
+        p_pagos: pagos,
       })
       if (error) throw error
 
       // El propio RPC registrar_venta ya sumo el total a la caja y (si es
       // fiado) a la deuda del cliente, de forma atomica junto con la venta.
-      // Aqui solo se refleja en el estado local para que el KPI de caja se
-      // vea al instante, sin esperar un recargo completo desde la BD.
+      // Con un solo metodo se refleja en el estado local al instante (sin
+      // esperar un recargo completo); con pago mixto es mas simple traer los
+      // totales reales de la BD que replicar en el cliente como el servidor
+      // reparte el vuelto entre las piernas.
       if (caja?.id) {
-        reflejarVentaLocal(caja.id, metodo, carrito.totales.total)
+        if (pagos.length <= 1) {
+          reflejarVentaLocal(caja.id, (pagos[0]?.metodo ?? 'efectivo'), carrito.totales.total)
+        } else {
+          recargarCaja()
+        }
       }
 
       setItemsTicket(carrito.items)
@@ -330,6 +376,7 @@ export function POS() {
                 producto={p}
                 onAgregar={(modalidad) => carrito.agregar(p, modalidad)}
                 onGranel={() => abrirGranel(p)}
+                onElegir={() => setPresentacionSel(p)}
               />
             ))}
           </div>
@@ -486,6 +533,45 @@ export function POS() {
         )}
       </Sheet>
 
+      {/* Elegir presentacion — cuando un producto tiene 2 o mas formas de
+          venderse (Caja + presentaciones flexibles, varios niveles de
+          empaque, etc.) */}
+      <Sheet
+        open={!!presentacionSel}
+        onClose={() => setPresentacionSel(null)}
+        title={presentacionSel ? presentacionSel.nombre : 'Elegir presentación'}
+        maxWidth="max-w-sm"
+      >
+        {presentacionSel && (
+          <ul className="divide-y divide-ink-100">
+            {presentacionSel.tipo_venta === 'granel' && (
+              <PresentacionFila
+                etiqueta={`A granel (${presentacionSel.unidad})`}
+                subtexto={`${money(presentacionSel.precio_venta)} / ${presentacionSel.unidad} · disponible ${cantidad(presentacionSel.stock_actual)} ${presentacionSel.unidad}`}
+                onClick={() => elegirPresentacion(presentacionSel, 'unidad')}
+              />
+            )}
+            {presentacionSel.tipo_venta !== 'granel' && (
+              <PresentacionFila
+                etiqueta="Unidad"
+                subtexto={`${money(presentacionSel.precio_venta)} · disponible ${cantidad(presentacionSel.stock_actual)}`}
+                disabled={presentacionSel.stock_actual <= 0}
+                onClick={() => elegirPresentacion(presentacionSel, 'unidad')}
+              />
+            )}
+            {presentacionesDisponibles(presentacionSel).map((o) => (
+              <PresentacionFila
+                key={o.modalidad}
+                etiqueta={o.etiqueta}
+                subtexto={`${money(o.precioVenta)} · disponible ${o.disponible}`}
+                disabled={o.disponible <= 0}
+                onClick={() => elegirPresentacion(presentacionSel, o.modalidad)}
+              />
+            ))}
+          </ul>
+        )}
+      </Sheet>
+
       <PaymentModal
         open={pagoAbierto}
         onClose={() => setPagoAbierto(false)}
@@ -493,6 +579,7 @@ export function POS() {
         procesando={procesando}
         clientes={clientes}
         onConfirmar={cobrar}
+        onCrearCliente={crearCliente}
       />
 
       {ventaHecha && (
@@ -531,24 +618,46 @@ function Chip({
   )
 }
 
+function PresentacionFila({
+  etiqueta,
+  subtexto,
+  disabled,
+  onClick,
+}: {
+  etiqueta: string
+  subtexto: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <li>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        className="flex w-full items-center justify-between px-1 py-3 text-left transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <span className="text-sm font-semibold text-ink-800">{etiqueta}</span>
+        <span className="tabular text-xs text-ink-400">{subtexto}</span>
+      </button>
+    </li>
+  )
+}
+
 function ProductoCard({
   producto,
   onAgregar,
   onGranel,
+  onElegir,
 }: {
   producto: Producto
   onAgregar: (modalidad: ModalidadVenta) => void
   onGranel: () => void
+  onElegir: () => void
 }) {
   const agotado = producto.stock_actual <= 0
   const bajo = producto.stock_actual > 0 && producto.stock_actual <= producto.stock_minimo
   const esGranel = producto.tipo_venta === 'granel'
-  const cajaDisp = producto.tiene_caja
-    ? Math.floor(producto.stock_actual / (producto.unidades_por_caja ?? 1))
-    : 0
-  const sacoDisp = producto.tiene_saco
-    ? Math.floor(producto.stock_actual / (producto.kg_por_saco ?? 1))
-    : 0
+  const opciones = presentacionesDisponibles(producto)
   const etiqStock = `${cantidad(producto.stock_actual)} ${etiquetaUnidad(producto)}`
 
   const imgSection = (
@@ -596,7 +705,34 @@ function ProductoCard({
     </div>
   )
 
-  if (esGranel && producto.tiene_saco) {
+  // 2 o mas formas de venderlo ademas de la base (Caja + una presentacion
+  // flexible, varios niveles de empaque...): una tarjeta con 2 botones ya no
+  // alcanza, se elige en una hoja aparte.
+  if (opciones.length > 1) {
+    return (
+      <div
+        className={cx(
+          'group flex flex-col overflow-hidden rounded-xl border border-ink-100 bg-white text-left transition',
+          agotado && 'opacity-50',
+        )}
+      >
+        {imgSection}
+        {infoSection}
+        <div className="border-t border-ink-100 p-1.5">
+          <button
+            onClick={onElegir}
+            disabled={agotado}
+            className="w-full rounded-lg bg-accent-100 py-1.5 text-xs font-semibold text-accent-700 transition hover:bg-accent-200 disabled:opacity-40"
+          >
+            Elegir presentación ({opciones.length + 1})
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (esGranel && opciones.length === 1) {
+    const o = opciones[0]
     return (
       <div
         className={cx(
@@ -615,11 +751,11 @@ function ProductoCard({
             {producto.unidad}
           </button>
           <button
-            onClick={() => onAgregar('saco')}
-            disabled={agotado || sacoDisp <= 0}
+            onClick={() => onAgregar(o.modalidad)}
+            disabled={agotado || o.disponible <= 0}
             className="flex-1 rounded-lg bg-accent-100 py-1.5 text-xs font-semibold text-accent-700 transition hover:bg-accent-200 disabled:opacity-40"
           >
-            Saco{sacoDisp > 0 ? ` (${sacoDisp})` : ''}
+            {o.etiqueta}{o.disponible > 0 ? ` (${o.disponible})` : ''}
           </button>
         </div>
       </div>
@@ -643,7 +779,8 @@ function ProductoCard({
     )
   }
 
-  if (producto.tiene_caja) {
+  if (opciones.length === 1) {
+    const o = opciones[0]
     return (
       <div
         className={cx(
@@ -662,11 +799,11 @@ function ProductoCard({
             Unidad
           </button>
           <button
-            onClick={() => onAgregar('caja')}
-            disabled={agotado || cajaDisp <= 0}
+            onClick={() => onAgregar(o.modalidad)}
+            disabled={agotado || o.disponible <= 0}
             className="flex-1 rounded-lg bg-accent-100 py-1.5 text-xs font-semibold text-accent-700 transition hover:bg-accent-200 disabled:opacity-40"
           >
-            Caja{cajaDisp > 0 ? ` (${cajaDisp})` : ''}
+            {o.etiqueta}{o.disponible > 0 ? ` (${o.disponible})` : ''}
           </button>
         </div>
       </div>
@@ -725,19 +862,11 @@ function CartPanel({ carrito, onCobrar }: { carrito: CarritoCtx; onCobrar: () =>
 }
 
 function precioItem(item: ItemCarrito): number {
-  if (item.modalidad === 'caja') return item.producto.precio_venta_caja ?? item.producto.precio_venta
-  if (item.modalidad === 'saco') return item.producto.precio_venta_saco ?? item.producto.precio_venta
-  return item.producto.precio_venta
+  return resolverPresentacion(item.producto, item.modalidad).precioVenta
 }
 
 function maxDisp(item: ItemCarrito): number {
-  if (item.modalidad === 'caja') {
-    return Math.floor(item.producto.stock_actual / (item.producto.unidades_por_caja ?? 1))
-  }
-  if (item.modalidad === 'saco') {
-    return Math.floor(item.producto.stock_actual / (item.producto.kg_por_saco ?? 1))
-  }
-  return item.producto.stock_actual
+  return maxCantidadPresentacion(item.producto, item.modalidad)
 }
 
 function CartItems({ carrito }: { carrito: CarritoCtx }) {
@@ -755,8 +884,7 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
       {carrito.items.map((i) => {
         const precio = precioItem(i)
         const max = maxDisp(i)
-        const esCaja = i.modalidad === 'caja'
-        const esSaco = i.modalidad === 'saco'
+        const etiquetaPresentacion = resolverPresentacion(i.producto, i.modalidad).etiqueta
         // Solo se pide cantidad fraccionada (kg) cuando es granel vendido
         // "suelto" (modalidad 'unidad'); por saco es una cantidad entera.
         const esKgFraccionado = i.producto.tipo_venta === 'granel' && i.modalidad === 'unidad'
@@ -787,12 +915,12 @@ function CartItems({ carrito }: { carrito: CarritoCtx }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-ink-800">{i.producto.nombre}</p>
               <p className="tabular text-xs text-ink-400">
-                {(esCaja || esSaco) && (
+                {etiquetaPresentacion && (
                   <span className="mr-1 rounded bg-accent-100 px-1 py-0.5 text-[0.6rem] font-bold uppercase text-accent-700">
-                    {esCaja ? 'Caja' : 'Saco'}
+                    {etiquetaPresentacion}
                   </span>
                 )}
-                {money(precio)} c/{esCaja ? 'caja' : esSaco ? 'saco' : esKgFraccionado ? i.producto.unidad : 'u'}
+                {money(precio)} c/{etiquetaPresentacion ?? (esKgFraccionado ? i.producto.unidad : 'u')}
               </p>
             </div>
             {esKgFraccionado ? (

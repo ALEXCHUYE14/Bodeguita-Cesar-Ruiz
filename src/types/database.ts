@@ -1,7 +1,14 @@
 // Tipos del dominio del sistema Comercial Ruiz
 
 export type Rol = 'administrador' | 'supervisor' | 'cajero'
-export type MetodoPago = 'efectivo' | 'yape' | 'fiado'
+// 'mixto' nunca se elige directamente (no aparece en el selector de pago):
+// el servidor lo asigna solo cuando una venta se paga con 2+ metodos
+// distintos (ver pagos_venta / registrar_venta con p_pagos).
+export type MetodoPago = 'efectivo' | 'yape' | 'fiado' | 'mixto'
+// Los 3 metodos que el cajero puede elegir en el cobro (con o sin pago
+// mixto) — 'mixto' es un resultado, no una opcion; los que solo existen en
+// la base (tarjeta/plin/transferencia) no tienen UI en el POS todavia.
+export type MetodoPagoSeleccionable = 'efectivo' | 'yape' | 'fiado'
 export type TipoMovimiento = 'entrada' | 'salida' | 'ajuste' | 'venta' | 'devolucion'
 export type EstadoCompra = 'pagado' | 'pendiente'
 export type MotivoMerma = 'vencido' | 'danado' | 'consumo_interno' | 'otro'
@@ -35,8 +42,32 @@ export type Categoria = {
   creado_en: string
 }
 
-export type ModalidadVenta = 'unidad' | 'caja' | 'saco'
+// 'unidad' | 'caja' | 'saco' son las modalidades "legacy" (una por producto,
+// columnas propias en Producto). Cualquier otro valor es el id de una fila
+// de ProductoPresentacion (empaquetado multinivel / venta fraccionada, ver
+// mas abajo) — por eso el tipo es `string` y no un union cerrado.
+export type ModalidadVenta = string
 export type TipoVenta = 'unidad' | 'granel'
+
+// Presentacion de venta/compra adicional a las de "caja"/"saco" (que siguen
+// existiendo tal cual, sin cambios). Permite cualquier numero de niveles de
+// empaquetado (Paquete Maestro, Bolsa, Docena...) y fracciones (Media Caja,
+// Medio Paquete...), cada una con su propio precio. "factor_unidades" esta
+// SIEMPRE expresado en unidades base (las de Producto.stock_actual), nunca
+// relativo a otro nivel — ver comentario en supabase/schema.sql.
+export type ProductoPresentacion = {
+  id: string
+  producto_id: string
+  nombre: string
+  factor_unidades: number
+  precio_compra: number | null
+  precio_venta: number
+  es_fraccion: boolean
+  orden: number
+  activo: boolean
+  creado_en: string
+  actualizado_en: string
+}
 
 export type Producto = {
   id: string
@@ -61,6 +92,8 @@ export type Producto = {
   creado_en: string
   actualizado_en: string
   categorias?: Categoria | null
+  /** Presentaciones flexibles activas de este producto, ya ordenadas — la agrega useProductos(). */
+  presentaciones?: ProductoPresentacion[]
 }
 
 export type Venta = {
@@ -79,6 +112,30 @@ export type Venta = {
   pago_recibido: number
   vuelto: number
   anulada: boolean
+  /** true si sus productos/cantidades fueron modificados despues de registrada (ver editar_venta). */
+  editada: boolean
+  creado_en: string
+}
+
+/** Desglose de como se pago una venta — 1 fila si fue de un solo metodo, 2+ si fue mixta (ver registrar_venta). */
+export type PagoVenta = {
+  id: string
+  venta_id: string
+  metodo: MetodoPago
+  monto: number
+  creado_en: string
+}
+
+/** Rastro de auditoria de una anulacion o edicion de venta: quien, cuando y por que. */
+export type AuditoriaVenta = {
+  id: string
+  venta_id: string | null
+  venta_numero: number | null
+  accion: 'anulada' | 'editada'
+  usuario_id: string | null
+  usuario_nombre: string | null
+  motivo: string
+  detalle: Record<string, unknown> | null
   creado_en: string
 }
 
@@ -93,6 +150,8 @@ export type DetalleVenta = {
   unidades: number
   precio_unitario: number
   subtotal: number
+  /** Nombre de la presentacion usada ("Caja", "Saco", o el nombre de una presentacion flexible), tal como estaba al momento de la venta. Null = unidad simple. */
+  presentacion_nombre: string | null
 }
 
 export type MovimientoInventario = {
@@ -181,6 +240,10 @@ export type DetalleCompra = {
   producto_id: string | null
   producto_nombre: string
   cantidad: number
+  modalidad: ModalidadVenta
+  unidades: number
+  /** Nombre de la presentacion usada, tal como estaba al momento de la compra. Null = unidad simple. */
+  presentacion_nombre: string | null
   precio_unitario: number
   subtotal: number
 }
@@ -237,8 +300,11 @@ export interface Database {
       perfiles: Tabla<Perfil>
       categorias: Tabla<Categoria>
       productos: Tabla<Producto>
+      producto_presentaciones: Tabla<ProductoPresentacion>
       ventas: Tabla<Venta>
       detalle_ventas: Tabla<DetalleVenta>
+      pagos_venta: Tabla<PagoVenta>
+      auditoria_ventas: Tabla<AuditoriaVenta>
       movimientos_inventario: Tabla<MovimientoInventario>
       clientes_credito: Tabla<ClienteCredito>
       pagos_credito: Tabla<PagoCredito>
@@ -255,11 +321,23 @@ export interface Database {
       registrar_venta: {
         Args: {
           p_items: unknown
-          p_metodo: MetodoPago
+          p_metodo?: MetodoPago | null
           p_descuento: number
-          p_pago_recibido: number
+          p_pago_recibido?: number
           p_caja_id: string | null
           p_cliente_id: string | null
+          p_tasa_igv?: number
+          /** Pago mixto: [{ metodo, monto }]. Omitido/null = un solo metodo (p_metodo + p_pago_recibido). */
+          p_pagos?: unknown
+        }
+        Returns: Venta
+      }
+      editar_venta: {
+        Args: {
+          p_venta_id: string
+          p_items: unknown
+          p_motivo: string
+          p_descuento?: number | null
           p_tasa_igv?: number
         }
         Returns: Venta
@@ -291,7 +369,7 @@ export interface Database {
         Args: { p_caja_id: string; p_metodo: string; p_monto: number }
         Returns: void
       }
-      anular_venta: { Args: { p_venta_id: string }; Returns: Venta }
+      anular_venta: { Args: { p_venta_id: string; p_motivo: string }; Returns: Venta }
       es_admin: { Args: Record<string, never>; Returns: boolean }
       registrar_egreso: {
         Args: {
@@ -305,6 +383,18 @@ export interface Database {
         Returns: Egreso
       }
       eliminar_egreso: { Args: { p_id: string }; Returns: void }
+      registrar_compra: {
+        Args: {
+          p_items: unknown
+          p_numero?: string | null
+          p_proveedor_id?: string | null
+          p_proveedor_nombre?: string | null
+          p_fecha_compra?: string
+          p_estado?: EstadoCompra
+          p_notas?: string | null
+        }
+        Returns: Compra
+      }
     }
     Enums: {
       rol_usuario: Rol

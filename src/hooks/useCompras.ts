@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Compra, DetalleCompra, EstadoCompra } from '@/types/database'
+import type { Compra, DetalleCompra, EstadoCompra, ModalidadVenta } from '@/types/database'
 
 export interface ItemCompra {
   producto_id: string | null
   producto_nombre: string
   cantidad: number
   precio_unitario: number
+  /** 'unidad' (por defecto), 'caja', 'saco', o el id de una presentación flexible. */
+  modalidad?: ModalidadVenta
 }
 
 export function useCompras() {
@@ -28,6 +30,11 @@ export function useCompras() {
     cargar()
   }, [cargar])
 
+  // Una sola llamada RPC transaccional (cabecera + detalle + stock + kardex,
+  // todo o nada) — ver registrar_compra() en supabase/schema.sql. Antes esto
+  // eran 3 pasos sueltos desde el cliente sin ninguna transaccion que los
+  // uniera, y el insert directo a detalle_compras ya fallaba porque esa
+  // tabla nunca tuvo una politica RLS de escritura para el cliente.
   async function crear(
     cabecera: {
       numero: string | null
@@ -36,44 +43,28 @@ export function useCompras() {
       fecha_compra: string
       estado: EstadoCompra
       notas: string | null
-      total: number
     },
     items: ItemCompra[],
   ): Promise<Compra> {
-    const { data: c, error: eC } = await supabase
-      .from('compras')
-      .insert(cabecera)
-      .select('*, proveedores(*)')
-      .single()
-    if (eC) throw eC
-
-    if (items.length > 0) {
-      const detalles: Omit<DetalleCompra, 'id'>[] = items.map((i) => ({
-        compra_id: c.id,
+    const { data, error } = await supabase.rpc('registrar_compra', {
+      p_items: items.map((i) => ({
         producto_id: i.producto_id,
         producto_nombre: i.producto_nombre,
         cantidad: i.cantidad,
         precio_unitario: i.precio_unitario,
-        subtotal: i.cantidad * i.precio_unitario,
-      }))
-      const { error: eD } = await supabase.from('detalle_compras').insert(detalles)
-      if (eD) throw eD
-
-      // Ingresar stock por cada item con producto vinculado
-      for (const i of items) {
-        if (i.producto_id) {
-          await supabase.rpc('ajustar_stock', {
-            p_producto_id: i.producto_id,
-            p_cantidad: i.cantidad,
-            p_tipo: 'entrada',
-            p_motivo: `Compra ${cabecera.numero ? '#' + cabecera.numero : c.id.slice(0, 8)}`,
-          })
-        }
-      }
-    }
-
-    setCompras((prev) => [c, ...prev])
-    return c
+        modalidad: i.modalidad ?? 'unidad',
+      })),
+      p_numero: cabecera.numero,
+      p_proveedor_id: cabecera.proveedor_id,
+      p_proveedor_nombre: cabecera.proveedor_nombre,
+      p_fecha_compra: cabecera.fecha_compra,
+      p_estado: cabecera.estado,
+      p_notas: cabecera.notas,
+    })
+    if (error) throw error
+    const compra = data as unknown as Compra
+    setCompras((prev) => [compra, ...prev])
+    return compra
   }
 
   async function cambiarEstado(id: string, estado: EstadoCompra): Promise<void> {

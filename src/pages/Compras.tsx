@@ -16,7 +16,8 @@ import { Button, Card, Badge } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { money, fechaCorta, cx, ymd } from '@/utils/format'
-import type { Compra, DetalleCompra, EstadoCompra } from '@/types/database'
+import { presentacionesDisponibles, resolverPresentacion } from '@/utils/presentaciones'
+import type { Compra, DetalleCompra, EstadoCompra, ModalidadVenta } from '@/types/database'
 
 export function Compras() {
   const { compras, cargando, crear, cambiarEstado, obtenerDetalles } = useCompras()
@@ -62,11 +63,17 @@ export function Compras() {
   }, [productos, busqProd])
 
   function agregarItem(nombre: string, prod_id: string | null) {
-    const existente = items.find((i) => i.producto_id === prod_id && prod_id !== null)
+    // Un mismo producto puede aparecer en varias filas si se compra en mas
+    // de una presentacion (ej. unidades sueltas + una caja completa) — por
+    // eso el "ya existe" solo agrupa cuando ademas coincide la modalidad
+    // (siempre 'unidad' para un item recien agregado desde el buscador).
+    const existente = items.find(
+      (i) => i.producto_id === prod_id && prod_id !== null && (i.modalidad ?? 'unidad') === 'unidad',
+    )
     if (existente) {
       setItems((prev) =>
         prev.map((i) =>
-          i.producto_id === prod_id ? { ...i, cantidad: i.cantidad + 1 } : i,
+          i === existente ? { ...i, cantidad: i.cantidad + 1 } : i,
         ),
       )
     } else {
@@ -78,6 +85,7 @@ export function Compras() {
           producto_nombre: nombre,
           cantidad: 1,
           precio_unitario: prod?.precio_compra ?? 0,
+          modalidad: 'unidad',
         },
       ])
     }
@@ -88,7 +96,13 @@ export function Compras() {
     if (!busqProd.trim()) return
     setItems((prev) => [
       ...prev,
-      { producto_id: null, producto_nombre: busqProd.trim(), cantidad: 1, precio_unitario: 0 },
+      {
+        producto_id: null,
+        producto_nombre: busqProd.trim(),
+        cantidad: 1,
+        precio_unitario: 0,
+        modalidad: 'unidad',
+      },
     ])
     setBusqProd('')
   }
@@ -101,8 +115,32 @@ export function Compras() {
     )
   }
 
+  // Al cambiar la presentacion de un item, se precarga su precio de compra
+  // configurado (si existe) — el usuario igual puede ajustarlo despues.
+  function cambiarModalidad(idx: number, modalidad: ModalidadVenta) {
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item
+        const prod = productos.find((p) => p.id === item.producto_id)
+        const precioSugerido = prod ? resolverPresentacion(prod, modalidad).precioCompra : null
+        return {
+          ...item,
+          modalidad,
+          precio_unitario: precioSugerido ?? item.precio_unitario,
+        }
+      }),
+    )
+  }
+
   function quitarItem(idx: number) {
     setItems((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  function unidadesBase(item: ItemCompra): number | null {
+    if (!item.producto_id || (item.modalidad ?? 'unidad') === 'unidad') return null
+    const prod = productos.find((p) => p.id === item.producto_id)
+    if (!prod) return null
+    return item.cantidad * resolverPresentacion(prod, item.modalidad!).factor
   }
 
   const totalCalculado = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0)
@@ -129,7 +167,6 @@ export function Compras() {
           fecha_compra: f.fecha_compra,
           estado: f.estado,
           notas: f.notas.trim() || null,
-          total: parseFloat(totalCalculado.toFixed(2)),
         },
         items,
       )
@@ -419,38 +456,76 @@ export function Compras() {
                 <span />
               </div>
               <ul className="divide-y divide-ink-100">
-                {items.map((item, idx) => (
-                  <li
-                    key={idx}
-                    className="grid grid-cols-[1fr_80px_100px_32px] items-center gap-2 px-3 py-2"
-                  >
-                    <span className="truncate text-sm font-semibold text-ink-800">
-                      {item.producto_nombre}
-                    </span>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.001}
-                      className="input tabular py-1 text-center text-sm"
-                      value={item.cantidad}
-                      onChange={(e) => actualizarItem(idx, 'cantidad', e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      className="input tabular py-1 text-right text-sm"
-                      value={item.precio_unitario}
-                      onChange={(e) => actualizarItem(idx, 'precio_unitario', e.target.value)}
-                    />
-                    <button
-                      onClick={() => quitarItem(idx)}
-                      className="grid size-7 place-items-center rounded-md text-ink-300 hover:bg-red-50 hover:text-red-600"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                {items.map((item, idx) => {
+                  const prod = productos.find((p) => p.id === item.producto_id)
+                  const opciones = prod ? presentacionesDisponibles(prod) : []
+                  const unidades = unidadesBase(item)
+                  return (
+                  <li key={idx} className="px-3 py-2">
+                    <div className="grid grid-cols-[1fr_80px_100px_32px] items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-ink-800">
+                        {item.producto_nombre}
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.001}
+                        className="input tabular py-1 text-center text-sm"
+                        value={item.cantidad}
+                        onChange={(e) => actualizarItem(idx, 'cantidad', e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        className="input tabular py-1 text-right text-sm"
+                        value={item.precio_unitario}
+                        onChange={(e) => actualizarItem(idx, 'precio_unitario', e.target.value)}
+                      />
+                      <button
+                        onClick={() => quitarItem(idx)}
+                        className="grid size-7 place-items-center rounded-md text-ink-300 hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                    {opciones.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-0.5">
+                        <button
+                          onClick={() => cambiarModalidad(idx, 'unidad')}
+                          className={cx(
+                            'rounded-md border px-2 py-0.5 text-[0.65rem] font-semibold transition',
+                            (item.modalidad ?? 'unidad') === 'unidad'
+                              ? 'border-accent-500 bg-accent-50 text-accent-700'
+                              : 'border-ink-200 text-ink-500 hover:border-ink-300',
+                          )}
+                        >
+                          Unidad
+                        </button>
+                        {opciones.map((o) => (
+                          <button
+                            key={o.modalidad}
+                            onClick={() => cambiarModalidad(idx, o.modalidad)}
+                            className={cx(
+                              'rounded-md border px-2 py-0.5 text-[0.65rem] font-semibold transition',
+                              item.modalidad === o.modalidad
+                                ? 'border-accent-500 bg-accent-50 text-accent-700'
+                                : 'border-ink-200 text-ink-500 hover:border-ink-300',
+                            )}
+                          >
+                            {o.etiqueta}
+                          </button>
+                        ))}
+                        {unidades !== null && (
+                          <span className="tabular text-[0.65rem] text-ink-400">
+                            = {Math.round(unidades * 1000) / 1000} {prod?.unidad}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </li>
-                ))}
+                  )
+                })}
               </ul>
             </div>
           )}
@@ -493,9 +568,17 @@ export function Compras() {
                       className="flex items-center justify-between px-3.5 py-2.5"
                     >
                       <div>
-                        <p className="text-sm font-semibold text-ink-800">{d.producto_nombre}</p>
+                        <p className="text-sm font-semibold text-ink-800">
+                          {d.producto_nombre}
+                          {d.presentacion_nombre && (
+                            <span className="ml-1.5 rounded bg-accent-100 px-1 py-0.5 text-[0.6rem] font-bold uppercase text-accent-700">
+                              {d.presentacion_nombre}
+                            </span>
+                          )}
+                        </p>
                         <p className="tabular text-xs text-ink-400">
                           {d.cantidad} × {money(d.precio_unitario)}
+                          {d.presentacion_nombre && ` (= ${d.unidades} unidades)`}
                         </p>
                       </div>
                       <span className="tabular text-sm font-bold text-ink-900">

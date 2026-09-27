@@ -12,6 +12,7 @@ import {
 } from '@/utils/imprimirTicket'
 import { imprimirPorBluetooth, bluetoothDisponible, autoImprimirActivo } from '@/utils/bluetoothPrint'
 import { useNegocio, etiquetaDocumento } from '@/config/negocio'
+import { resolverPresentacion } from '@/utils/presentaciones'
 import type { ItemCarrito, Venta } from '@/types/database'
 
 const ETIQUETA: Record<string, string> = {
@@ -21,14 +22,12 @@ const ETIQUETA: Record<string, string> = {
 }
 
 function precioItem(item: ItemCarrito): number {
-  if (item.modalidad === 'caja') return item.producto.precio_venta_caja ?? item.producto.precio_venta
-  if (item.modalidad === 'saco') return item.producto.precio_venta_saco ?? item.producto.precio_venta
-  return item.producto.precio_venta
+  return resolverPresentacion(item.producto, item.modalidad).precioVenta
 }
 
 function etiquetaCantidad(item: ItemCarrito): string {
   // El formato "N kg" solo aplica cuando se vendio a granel suelto
-  // (modalidad 'unidad'); por caja o por saco es una cantidad entera.
+  // (modalidad 'unidad'); por cualquier otra presentacion es una cantidad entera.
   if (item.producto.tipo_venta === 'granel' && item.modalidad === 'unidad') {
     return `${cantidad(item.cantidad)} ${item.producto.unidad}`
   }
@@ -39,7 +38,7 @@ function lineaDesdeItem(item: ItemCarrito): LineaTicket {
   return {
     etiquetaCantidad: etiquetaCantidad(item),
     nombre: item.producto.nombre,
-    etiquetaModalidad: item.modalidad === 'caja' ? 'Caja' : item.modalidad === 'saco' ? 'Saco' : undefined,
+    etiquetaModalidad: resolverPresentacion(item.producto, item.modalidad).etiqueta ?? undefined,
     monto: precioItem(item) * item.cantidad,
   }
 }
@@ -170,13 +169,15 @@ export function Receipt({ open, onClose, venta, items }: Props) {
 
         {/* Items */}
         <div className="space-y-1">
-          {items.map((i) => (
+          {items.map((i) => {
+            const etiquetaPres = resolverPresentacion(i.producto, i.modalidad).etiqueta
+            return (
             <div key={`${i.producto.id}::${i.modalidad}`} className="flex justify-between gap-2">
               <span className="min-w-0 break-words font-semibold text-ink-800">
                 {etiquetaCantidad(i)} {i.producto.nombre}
-                {(i.modalidad === 'caja' || i.modalidad === 'saco') && (
+                {etiquetaPres && (
                   <span className="ml-1 rounded bg-accent-100 px-1 py-0.5 text-[0.55rem] font-bold uppercase text-accent-700">
-                    {i.modalidad === 'caja' ? 'Caja' : 'Saco'}
+                    {etiquetaPres}
                   </span>
                 )}
               </span>
@@ -184,7 +185,8 @@ export function Receipt({ open, onClose, venta, items }: Props) {
                 {money(precioItem(i) * i.cantidad)}
               </span>
             </div>
-          ))}
+            )
+          })}
         </div>
 
         <hr className="my-2 border-dashed border-ink-300" />

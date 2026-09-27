@@ -7,6 +7,12 @@ import { CameraScanner } from '@/components/pos/CameraScanner'
 import { useProductoImagen } from '@/hooks/useProductoImagen'
 import { supabase } from '@/lib/supabase'
 import { cx } from '@/utils/format'
+import {
+  PresentacionesEditor,
+  errorFilaPresentacion,
+  nombreDuplicado,
+  type FilaPresentacion,
+} from '@/components/inventory/PresentacionesEditor'
 import type { Categoria, Producto, TipoVenta } from '@/types/database'
 
 const UNIDADES_GRANEL = ['kg', 'g', 'litro', 'ml']
@@ -56,6 +62,7 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado, s
   const [tieneCaja, setTieneCaja] = useState(false)
   const [tieneSaco, setTieneSaco] = useState(false)
   const [tipoVenta, setTipoVenta] = useState<TipoVenta>('unidad')
+  const [presentaciones, setPresentaciones] = useState<FilaPresentacion[]>([])
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [arrastrando, setArrastrando] = useState(false)
@@ -82,11 +89,22 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado, s
       setTieneCaja(producto.tiene_caja)
       setTieneSaco(producto.tiene_saco)
       setTipoVenta(producto.tipo_venta ?? 'unidad')
+      setPresentaciones(
+        (producto.presentaciones ?? []).map((p) => ({
+          id: p.id,
+          nombre: p.nombre,
+          factorUnidades: String(p.factor_unidades),
+          precioCompra: p.precio_compra === null ? '' : String(p.precio_compra),
+          precioVenta: String(p.precio_venta),
+          esFraccion: p.es_fraccion,
+        })),
+      )
     } else {
       setF({ ...vacio, sku: skuInicial ?? '' })
       setTieneCaja(false)
       setTieneSaco(false)
       setTipoVenta('unidad')
+      setPresentaciones([])
       // Si llega con un SKU ya leido (escaneo rapido desde Inventario), el
       // usuario solo necesita escribir el nombre: enfocamos ese campo.
       if (open && skuInicial) setTimeout(() => nombreRef.current?.focus(), 150)
@@ -145,11 +163,67 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado, s
     if (file) seleccionarImagen(file)
   }
 
+  // Reconcilia el borrador de presentaciones con la tabla: actualiza las que
+  // ya tenian id, inserta las nuevas, y borra las que estaban antes y ya no
+  // estan en el borrador. Se hace en 3 pasos porque supabase-js no tiene un
+  // "upsert + borrar las que falten" en una sola llamada para este caso
+  // (updates parciales por fila, no un reemplazo total de columnas).
+  async function guardarPresentaciones(productoId: string, filas: FilaPresentacion[]): Promise<void> {
+    const idsOriginales = new Set((producto?.presentaciones ?? []).map((p) => p.id))
+    const idsActuales = new Set(filas.filter((f) => f.id).map((f) => f.id as string))
+    const idsABorrar = [...idsOriginales].filter((id) => !idsActuales.has(id))
+
+    if (idsABorrar.length > 0) {
+      const { error } = await supabase.from('producto_presentaciones').delete().in('id', idsABorrar)
+      if (error) throw error
+    }
+
+    for (const f of filas) {
+      const row = {
+        producto_id: productoId,
+        nombre: f.nombre.trim(),
+        factor_unidades: parseFloat(f.factorUnidades),
+        precio_compra: f.precioCompra.trim() === '' ? null : parseFloat(f.precioCompra),
+        precio_venta: parseFloat(f.precioVenta) || 0,
+        es_fraccion: f.esFraccion,
+      }
+      if (f.id) {
+        const { error } = await supabase.from('producto_presentaciones').update(row).eq('id', f.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('producto_presentaciones').insert(row)
+        if (error) throw error
+      }
+    }
+  }
+
   async function guardar() {
     if (!f.sku.trim() || !f.nombre.trim()) {
       toast.error('SKU y nombre son obligatorios.')
       return
     }
+
+    // Filas completamente vacias (el usuario le dio "Agregar presentación"
+    // pero no llego a completarla) se ignoran en silencio; cualquier otra
+    // se valida con las mismas reglas que la base de datos (ver
+    // validar_presentacion en supabase/schema.sql) para avisar antes de
+    // guardar, no despues.
+    const presentacionesUtiles = presentaciones.filter(
+      (p) => p.nombre.trim() !== '' || p.factorUnidades.trim() !== '' || p.precioVenta.trim() !== '',
+    )
+    for (const p of presentacionesUtiles) {
+      const err = errorFilaPresentacion(p, tipoVenta)
+      if (err) {
+        toast.error(err)
+        return
+      }
+    }
+    const dup = nombreDuplicado(presentacionesUtiles)
+    if (dup) {
+      toast.error(`Hay dos presentaciones llamadas "${dup}".`)
+      return
+    }
+
     setGuardando(true)
     const payload = {
       sku: f.sku.trim(),
@@ -193,6 +267,12 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado, s
       toast.error(msg.includes('duplicate') ? 'Ese SKU ya existe.' : msg)
       setGuardando(false)
       return
+    }
+
+    try {
+      await guardarPresentaciones(productoId, presentacionesUtiles)
+    } catch (e) {
+      toast.error(`Producto guardado, pero las presentaciones no se pudieron guardar: ${mensajeDeError(e)}`)
     }
 
     try {
@@ -524,6 +604,16 @@ export function ProductForm({ open, onClose, producto, categorias, onGuardado, s
           )}
         </div>
         )}
+
+        {/* Presentaciones adicionales: empaquetado multinivel (Paquete,
+            Bolsa...) y ventas fraccionadas (Media Caja...). Complementa,
+            no reemplaza, la venta por caja/saco de arriba. */}
+        <PresentacionesEditor
+          filas={presentaciones}
+          onChange={setPresentaciones}
+          tipoVenta={tipoVenta}
+          unidad={f.unidad}
+        />
 
         {/* Foto del producto */}
         <div>

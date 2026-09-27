@@ -6,6 +6,7 @@ import {
   Filter,
   X,
   Ban,
+  Pencil,
   ChevronDown,
   Download,
   MessageCircle,
@@ -18,6 +19,7 @@ import { useCajaCtx } from '@/context/CajaContext'
 import { Card, Badge, Button, Spinner } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
+import { EditarVenta } from '@/components/ventas/EditarVenta'
 import {
   money,
   fechaHora,
@@ -73,6 +75,7 @@ const TONO_PAGO: Record<MetodoPago, 'neutral' | 'success' | 'info' | 'warning'> 
   efectivo: 'success',
   yape: 'info',
   fiado: 'warning',
+  mixto: 'neutral',
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -99,6 +102,7 @@ const ESTILO_METODO: Record<string, { bg: string; text: string }> = {
   efectivo: { bg: 'bg-accent-50', text: 'text-accent-700' },
   yape: { bg: 'bg-blue-50', text: 'text-blue-700' },
   fiado: { bg: 'bg-amber-50', text: 'text-amber-700' },
+  mixto: { bg: 'bg-indigo-50', text: 'text-indigo-700' },
   tarjeta: { bg: 'bg-purple-50', text: 'text-purple-700' },
   plin: { bg: 'bg-sky-50', text: 'text-sky-700' },
   transferencia: { bg: 'bg-indigo-50', text: 'text-indigo-700' },
@@ -235,7 +239,7 @@ function ReporteMetodoPago() {
 
 export function Ventas() {
   const { esAdmin } = useAuth()
-  const { caja } = useCajaCtx()
+  const { caja, recargar: recargarCaja } = useCajaCtx()
   const toast = useToast()
 
   const hoy = ymd(new Date())
@@ -781,11 +785,14 @@ export function Ventas() {
       {/* Reimpresion de ticket */}
       <TicketReprint
         venta={ticket}
-        esAdmin={esAdmin}
         onClose={() => setTicket(null)}
         onAnulada={() => {
           setTicket(null)
           cargar()
+          // Anular/editar puede haber cambiado los totales de la caja activa
+          // (ver anular_venta/editar_venta) — se refresca para que el
+          // resumen "en vivo" de arriba no se quede con numeros viejos.
+          recargarCaja()
         }}
       />
     </div>
@@ -797,24 +804,26 @@ export function Ventas() {
 // A diferencia del ticket recien cobrado (Receipt.tsx), aqui solo tenemos el
 // registro historico "aplanado" (detalle_ventas), sin el producto completo —
 // por eso no se puede mostrar "0.750 kg" con certeza (no sabemos la unidad de
-// medida), pero si se distingue caja/saco.
+// medida). La etiqueta de presentacion (Caja/Saco/una flexible) viene
+// guardada tal como estaba al momento de la venta en "presentacion_nombre";
+// las ventas de antes de esa columna caen al criterio legacy caja/saco.
 function lineaDesdeDetalle(d: DetalleVenta): LineaTicket {
   return {
     etiquetaCantidad: `${cantidad(d.cantidad)}x`,
     nombre: d.producto_nombre,
-    etiquetaModalidad: d.modalidad === 'caja' ? 'Caja' : d.modalidad === 'saco' ? 'Saco' : undefined,
+    etiquetaModalidad:
+      d.presentacion_nombre ??
+      (d.modalidad === 'caja' ? 'Caja' : d.modalidad === 'saco' ? 'Saco' : undefined),
     monto: Number(d.subtotal),
   }
 }
 
 function TicketReprint({
   venta,
-  esAdmin,
   onClose,
   onAnulada,
 }: {
   venta: Venta | null
-  esAdmin: boolean
   onClose: () => void
   onAnulada: () => void
 }) {
@@ -823,7 +832,10 @@ function TicketReprint({
   const documentoNegocio = etiquetaDocumento(negocio)
   const [detalle, setDetalle] = useState<DetalleVenta[]>([])
   const [cargando, setCargando] = useState(false)
+  const [anularAbierto, setAnularAbierto] = useState(false)
+  const [motivoAnular, setMotivoAnular] = useState('')
   const [anulando, setAnulando] = useState(false)
+  const [editarAbierto, setEditarAbierto] = useState(false)
   const [waAbierto, setWaAbierto] = useState(false)
   const [telWA, setTelWA] = useState('')
   const [btImprimiendo, setBtImprimiendo] = useState(false)
@@ -833,6 +845,15 @@ function TicketReprint({
     setCargando(true)
     setWaAbierto(false)
     setTelWA('')
+    setAnularAbierto(false)
+    setMotivoAnular('')
+    cargarDetalle()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venta])
+
+  function cargarDetalle() {
+    if (!venta) return
+    setCargando(true)
     supabase
       .from('detalle_ventas')
       .select('*')
@@ -841,22 +862,29 @@ function TicketReprint({
         setDetalle(data ?? [])
         setCargando(false)
       })
-  }, [venta])
+  }
 
+  // Anulacion abierta a cualquier usuario activo (antes solo admin) — el
+  // motivo obligatorio y el registro en auditoria_ventas (quien, cuando, por
+  // que) son la salvaguarda de este permiso mas amplio.
   async function anular() {
     if (!venta) return
-    const ok = window.confirm(
-      `Anular el comprobante #${venta.numero}? Se devolvera el stock vendido.`,
-    )
-    if (!ok) return
+    if (!motivoAnular.trim()) {
+      toast.error('Indica el motivo de la anulación.')
+      return
+    }
     setAnulando(true)
-    const { error } = await supabase.rpc('anular_venta', { p_venta_id: venta.id })
+    const { error } = await supabase.rpc('anular_venta', {
+      p_venta_id: venta.id,
+      p_motivo: motivoAnular.trim(),
+    })
     setAnulando(false)
     if (error) {
       toast.error(error.message || 'No se pudo anular la venta')
       return
     }
     toast.exito(`Comprobante #${venta.numero} anulado`)
+    setAnularAbierto(false)
     onAnulada()
   }
 
@@ -921,42 +949,90 @@ function TicketReprint({
       onClose={onClose}
       maxWidth="max-w-sm"
       footer={
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={imprimir} disabled={cargando}>
-              <Printer className="size-4" /> Imprimir
-            </Button>
-            {bluetoothDisponible() && (
+        anularAbierto ? (
+          <div className="space-y-2">
+            <input
+              className="input"
+              autoFocus
+              value={motivoAnular}
+              onChange={(e) => setMotivoAnular(e.target.value)}
+              placeholder="Motivo de la anulación (obligatorio)"
+              onKeyDown={(e) => e.key === 'Enter' && anular()}
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setAnularAbierto(false)} disabled={anulando}>
+                Cancelar
+              </Button>
               <Button
-                variant="outline"
+                variant="danger"
                 className="flex-1"
-                onClick={imprimirBT}
-                disabled={cargando}
-                loading={btImprimiendo}
+                onClick={anular}
+                loading={anulando}
+                disabled={!motivoAnular.trim()}
               >
-                <Bluetooth className="size-4" /> Bluetooth
+                <Ban className="size-4" /> Confirmar anulación
               </Button>
-            )}
+            </div>
           </div>
-          <div className="flex gap-2">
-            {esAdmin && !venta.anulada && (
-              <Button variant="danger" className="flex-1" onClick={anular} loading={anulando}>
-                <Ban className="size-4" /> Anular
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={imprimir} disabled={cargando}>
+                <Printer className="size-4" /> Imprimir
               </Button>
-            )}
-            <Button variant="secondary" className="flex-1" onClick={onClose}>
-              Cerrar
-            </Button>
+              {bluetoothDisponible() && (
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={imprimirBT}
+                  disabled={cargando}
+                  loading={btImprimiendo}
+                >
+                  <Bluetooth className="size-4" /> Bluetooth
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {!venta.anulada && (
+                <Button variant="outline" className="flex-1" onClick={() => setEditarAbierto(true)} disabled={cargando}>
+                  <Pencil className="size-4" /> Editar
+                </Button>
+              )}
+              {!venta.anulada && (
+                <Button variant="danger" className="flex-1" onClick={() => setAnularAbierto(true)}>
+                  <Ban className="size-4" /> Anular
+                </Button>
+              )}
+              <Button variant="secondary" className="flex-1" onClick={onClose}>
+                Cerrar
+              </Button>
+            </div>
           </div>
-        </div>
+        )
       }
     >
       <div className="mb-3 text-center">
         <p className="font-display text-lg font-bold text-ink-900">
           Comprobante #{venta.numero}
         </p>
-        {venta.anulada && <Badge tone="danger">Anulada</Badge>}
+        <div className="mt-1 flex items-center justify-center gap-1.5">
+          {venta.anulada && <Badge tone="danger">Anulada</Badge>}
+          {venta.editada && <Badge tone="info">Editada</Badge>}
+        </div>
       </div>
+
+      {/* Edicion de productos de la venta (reemplaza sin anular) */}
+      <EditarVenta
+        open={editarAbierto}
+        onClose={() => setEditarAbierto(false)}
+        venta={venta}
+        detalle={detalle}
+        onEditada={() => {
+          setEditarAbierto(false)
+          cargarDetalle()
+          onAnulada() // recarga la lista/resumen del historial (mismo callback que anular)
+        }}
+      />
 
       <div
         className="rounded-xl border border-dashed border-ink-200 p-4 font-sans text-sm"
@@ -975,19 +1051,24 @@ function TicketReprint({
           </div>
         ) : (
           <div className="space-y-1 border-y border-ink-100 py-2.5">
-            {detalle.map((d) => (
+            {detalle.map((d) => {
+              const etiquetaPres =
+                d.presentacion_nombre ??
+                (d.modalidad === 'caja' ? 'Caja' : d.modalidad === 'saco' ? 'Saco' : null)
+              return (
               <div key={d.id} className="flex justify-between gap-2">
                 <span className="min-w-0 truncate text-ink-700">
                   {cantidad(d.cantidad)}x {d.producto_nombre}
-                  {(d.modalidad === 'caja' || d.modalidad === 'saco') && (
+                  {etiquetaPres && (
                     <span className="ml-1 rounded bg-accent-100 px-1 py-0.5 text-[0.6rem] font-bold uppercase text-accent-700">
-                      {d.modalidad === 'caja' ? 'Caja' : 'Saco'}
+                      {etiquetaPres}
                     </span>
                   )}
                 </span>
                 <span className="tabular shrink-0 text-ink-900">{money(Number(d.subtotal))}</span>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
 

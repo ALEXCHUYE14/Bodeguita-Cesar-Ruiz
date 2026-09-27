@@ -30,6 +30,14 @@ do $$ begin
   create type metodo_pago as enum ('efectivo', 'tarjeta', 'yape', 'plin', 'transferencia', 'fiado');
 exception when duplicate_object then null; end $$;
 
+-- Migracion en caliente: "mixto" = una venta pagada con 2+ metodos distintos
+-- (ver tabla pagos_venta y registrar_venta mas abajo). No se usa como valor
+-- literal en ESTA transaccion (solo dentro de cuerpos de funciones, que se
+-- evaluan recien cuando se invocan) — evita el error de Postgres "unsafe use
+-- of new value of enum type" por usar un valor nuevo en la misma transaccion
+-- que lo agrega.
+alter type metodo_pago add value if not exists 'mixto';
+
 do $$ begin
   create type tipo_movimiento as enum ('entrada', 'salida', 'ajuste', 'venta', 'devolucion');
 exception when duplicate_object then null; end $$;
@@ -188,6 +196,35 @@ do $$ begin
     check (tiene_saco = false or tipo_venta = 'granel');
 exception when duplicate_object then null; end $$;
 
+-- Endurecimiento: un 0 en estos campos no tiene sentido de negocio (una caja
+-- de 0 unidades) y ademas es peligroso — el codigo de ventas/compras los usa
+-- como multiplicador, y un 0 explicito (distinto de "no configurado" = null)
+-- dejaria descontar/ingresar 0 unidades de stock al vender/comprar "cajas" o
+-- "sacos" enteros, sin ningun aviso. Se normalizan valores invalidos
+-- existentes a null (equivalente a "no configurado") antes de exigir la
+-- restriccion, para no romper la migracion sobre datos previos.
+update public.productos set unidades_por_caja = null where unidades_por_caja is not null and unidades_por_caja <= 0;
+update public.productos set kg_por_saco       = null where kg_por_saco       is not null and kg_por_saco       <= 0;
+update public.productos set precio_venta_caja = null where precio_venta_caja is not null and precio_venta_caja < 0;
+update public.productos set precio_venta_saco = null where precio_venta_saco is not null and precio_venta_saco < 0;
+
+do $$ begin
+  alter table public.productos add constraint productos_unidades_caja_positivas
+    check (unidades_por_caja is null or unidades_por_caja > 0);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.productos add constraint productos_kg_saco_positivo
+    check (kg_por_saco is null or kg_por_saco > 0);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.productos add constraint productos_precio_caja_no_negativo
+    check (precio_venta_caja is null or precio_venta_caja >= 0);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.productos add constraint productos_precio_saco_no_negativo
+    check (precio_venta_saco is null or precio_venta_saco >= 0);
+exception when duplicate_object then null; end $$;
+
 create index if not exists idx_productos_sku       on public.productos (sku);
 create index if not exists idx_productos_categoria on public.productos (categoria_id);
 create index if not exists idx_productos_stock_bajo on public.productos (stock_actual)
@@ -210,6 +247,91 @@ drop trigger if exists trg_productos_touch on public.productos;
 create trigger trg_productos_touch
   before update on public.productos
   for each row execute function public.touch_actualizado_en();
+
+-- ----------------------------------------------------------------------------
+-- 4b. PRESENTACIONES DE PRODUCTO (empaquetado multinivel y ventas fraccionadas)
+-- ----------------------------------------------------------------------------
+-- Complementa (no reemplaza) el sistema de "caja"/"saco" de arriba: permite
+-- definir CUALQUIER numero de presentaciones extra por producto — niveles
+-- completos (Paquete Maestro, Bolsa intermedia) y/o fracciones (Media Caja,
+-- Medio Paquete) — cada una con su propio precio de compra/venta.
+--
+-- Diseno clave: "factor_unidades" siempre esta expresado en UNIDADES BASE
+-- (las mismas de productos.stock_actual), nunca relativo a otro nivel. Un
+-- producto con 1 Paquete = 5 Bolsas = 10 unidades c/u (50 unidades base) se
+-- modela como dos filas independientes: Bolsa=10, Paquete=50. Esto evita
+-- arrastrar redondeos al encadenar niveles y hace que el descuento/ingreso de
+-- stock sea una simple multiplicacion, sin importar cuantos niveles existan.
+--
+-- Un producto SIN filas aqui (el caso normal, sin tocar nada) sigue
+-- funcionando exactamente igual que antes — compatibilidad hacia atras total.
+create table if not exists public.producto_presentaciones (
+  id               uuid primary key default gen_random_uuid(),
+  producto_id      uuid not null references public.productos(id) on delete cascade,
+  nombre           text not null check (char_length(btrim(nombre)) between 1 and 40),
+  -- Unidades base que equivale UNA de esta presentacion (ver nota arriba).
+  factor_unidades  numeric not null check (factor_unidades > 0),
+  precio_compra    numeric(10,2) check (precio_compra is null or precio_compra >= 0),
+  precio_venta     numeric(10,2) not null check (precio_venta >= 0),
+  -- Puramente informativo (para mostrar un badge "Fraccion" en la UI); no
+  -- afecta ningun calculo — el factor ya define correctamente la conversion.
+  es_fraccion      boolean not null default false,
+  orden            smallint not null default 0,
+  activo           boolean not null default true,
+  creado_en        timestamptz not null default now(),
+  actualizado_en   timestamptz not null default now(),
+  unique (producto_id, nombre)
+);
+
+comment on column public.producto_presentaciones.factor_unidades is
+  'Unidades base (mismas de productos.stock_actual) que equivale UNA de esta presentacion. Siempre absoluto, nunca relativo a otro nivel.';
+
+create index if not exists idx_presentaciones_producto on public.producto_presentaciones (producto_id) where activo = true;
+
+drop trigger if exists trg_presentaciones_touch on public.producto_presentaciones;
+create trigger trg_presentaciones_touch
+  before update on public.producto_presentaciones
+  for each row execute function public.touch_actualizado_en();
+
+-- Validacion adicional que un CHECK simple no puede expresar (depende de otra
+-- tabla): en productos "por unidad" (piezas enteras, no a granel), el factor
+-- debe ser un numero entero de unidades — no tiene sentido vender/fraccionar
+-- "2.3 piezas" de un producto discreto. En productos a granel si se permiten
+-- fracciones (ej. medio saco de 12.5 kg).
+create or replace function public.validar_presentacion()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_tipo_venta text;
+begin
+  new.nombre := btrim(new.nombre);
+  if new.nombre = '' then
+    raise exception 'El nombre de la presentacion no puede estar vacio.';
+  end if;
+  if new.factor_unidades is null or new.factor_unidades <= 0 then
+    raise exception 'La presentacion debe equivaler a una cantidad de unidades mayor a cero.';
+  end if;
+
+  select tipo_venta into v_tipo_venta from public.productos where id = new.producto_id;
+  if v_tipo_venta is null then
+    raise exception 'Producto no encontrado.';
+  end if;
+  if v_tipo_venta = 'unidad' and new.factor_unidades <> trunc(new.factor_unidades) then
+    raise exception
+      'Para productos por unidad, "%" debe equivaler a un numero entero de unidades (recibido %).',
+      new.nombre, new.factor_unidades;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_presentaciones_validar on public.producto_presentaciones;
+create trigger trg_presentaciones_validar
+  before insert or update on public.producto_presentaciones
+  for each row execute function public.validar_presentacion();
 
 -- ----------------------------------------------------------------------------
 -- 5. CAJAS REGISTRADORAS
@@ -293,6 +415,12 @@ create table if not exists public.ventas (
   creado_en       timestamptz not null default now()
 );
 
+-- Migracion en caliente: marca si una venta fue modificada despues de creada
+-- (ver RPC editar_venta y tabla auditoria_ventas mas abajo).
+alter table public.ventas add column if not exists editada boolean not null default false;
+comment on column public.ventas.editada is
+  'true si sus productos/cantidades fueron modificados despues de registrada (ver editar_venta() y auditoria_ventas).';
+
 create index if not exists idx_ventas_fecha  on public.ventas (creado_en desc);
 create index if not exists idx_ventas_cajero on public.ventas (cajero_id);
 create index if not exists idx_ventas_metodo on public.ventas (metodo);
@@ -311,25 +439,85 @@ create table if not exists public.detalle_ventas (
   modalidad        text not null default 'unidad',
   unidades         double precision not null default 0,
   precio_unitario  numeric(10,2) not null,
-  subtotal         numeric(10,2) not null
+  subtotal         numeric(10,2) not null,
+  presentacion_nombre text
 );
 
 -- Migracion en caliente (ver nota en la tabla productos).
 alter table public.detalle_ventas alter column cantidad type double precision using cantidad::double precision;
 alter table public.detalle_ventas add column if not exists modalidad text not null default 'unidad';
 alter table public.detalle_ventas add column if not exists unidades double precision not null default 0;
+alter table public.detalle_ventas add column if not exists presentacion_nombre text;
 -- Backfill unico: filas creadas antes de esta migracion no tienen "unidades"
 -- (queda en 0 por el default). Para esas, "cantidad" es el mejor estimado
 -- disponible (coincide siempre que la venta no haya sido por caja).
 update public.detalle_ventas set unidades = cantidad where unidades = 0;
 
 comment on column public.detalle_ventas.cantidad is
-  'Cantidad tal como se vendio: N cajas, N kg o N unidades, segun modalidad.';
+  'Cantidad tal como se vendio: N cajas, N kg, N unidades o N de una presentacion flexible, segun modalidad.';
 comment on column public.detalle_ventas.unidades is
-  'Unidades reales de stock descontadas (cantidad * unidades_por_caja si modalidad=caja). Se usa para anular ventas correctamente.';
+  'Unidades reales de stock descontadas (cantidad * factor de la presentacion). Se usa para anular ventas correctamente.';
+comment on column public.detalle_ventas.presentacion_nombre is
+  'Nombre a mostrar de la presentacion usada ("Caja", "Saco" o el nombre de una presentacion flexible), tomado en el momento de la venta. Null = unidad simple.';
 
 create index if not exists idx_detalle_venta    on public.detalle_ventas (venta_id);
 create index if not exists idx_detalle_producto on public.detalle_ventas (producto_id);
+
+-- ----------------------------------------------------------------------------
+-- 8b. PAGOS DE VENTA (desglose por metodo — soporta pagos mixtos)
+-- ----------------------------------------------------------------------------
+-- Toda venta tiene 1+ filas aqui, sin importar si se pago con un solo metodo
+-- (el caso normal, una fila) o con varios (ej. Efectivo + Yape, dos filas).
+-- "monto" es siempre la CONTRIBUCION real de esa pierna al total de la venta
+-- (neto del vuelto si es la pierna en efectivo la que dio cambio) — por
+-- diseno, sum(monto) de las filas de una venta SIEMPRE es igual a
+-- ventas.total. Esto es lo que permite que editar_venta() reescale
+-- proporcionalmente los pagos cuando cambia el total sin tener que volver a
+-- pedirle el pago al cliente.
+create table if not exists public.pagos_venta (
+  id         uuid primary key default gen_random_uuid(),
+  venta_id   uuid not null references public.ventas(id) on delete cascade,
+  metodo     metodo_pago not null,
+  monto      numeric(10,2) not null check (monto > 0),
+  creado_en  timestamptz not null default now()
+);
+
+create index if not exists idx_pagos_venta_venta on public.pagos_venta (venta_id);
+
+comment on table public.pagos_venta is
+  'Desglose de como se pago cada venta. sum(monto) por venta_id == ventas.total siempre. metodo=mixto en ventas.metodo cuando hay 2+ filas con distinto metodo aqui.';
+
+-- Backfill: toda venta NO anulada creada antes de esta migracion (o por
+-- llamadas a registrar_venta que aun no mandaban pagos) no tiene filas aqui
+-- todavia — se le crea una sola fila con su metodo/total tal cual, para que
+-- anular_venta()/editar_venta() puedan operar de forma uniforme sobre
+-- CUALQUIER venta sin distinguir "vieja" de "nueva".
+insert into public.pagos_venta (venta_id, metodo, monto)
+select v.id, v.metodo, v.total
+from public.ventas v
+where not v.anulada
+  and v.total > 0
+  and not exists (select 1 from public.pagos_venta pv where pv.venta_id = v.id);
+
+-- ----------------------------------------------------------------------------
+-- 8c. AUDITORIA DE VENTAS (anulaciones y ediciones: quien, cuando, por que)
+-- ----------------------------------------------------------------------------
+create table if not exists public.auditoria_ventas (
+  id            uuid primary key default gen_random_uuid(),
+  venta_id      uuid references public.ventas(id) on delete set null,
+  venta_numero  bigint,
+  accion        text not null check (accion in ('anulada', 'editada')),
+  usuario_id    uuid references public.perfiles(id) on delete set null,
+  usuario_nombre text,
+  motivo        text not null check (btrim(motivo) <> ''),
+  detalle       jsonb,
+  creado_en     timestamptz not null default now()
+);
+
+create index if not exists idx_auditoria_ventas_venta on public.auditoria_ventas (venta_id, creado_en desc);
+
+comment on table public.auditoria_ventas is
+  'Rastro de auditoria de anulaciones y ediciones de ventas: quien, cuando y por que. Solo se escribe desde anular_venta()/editar_venta() (security definer).';
 
 -- ----------------------------------------------------------------------------
 -- 9. MOVIMIENTOS DE INVENTARIO (Kardex simplificado)
@@ -420,17 +608,34 @@ create index if not exists idx_compras_fecha on public.compras (fecha_compra des
 -- 13. DETALLE DE COMPRAS
 -- ----------------------------------------------------------------------------
 create table if not exists public.detalle_compras (
-  id               uuid primary key default gen_random_uuid(),
-  compra_id        uuid not null references public.compras(id) on delete cascade,
-  producto_id      uuid references public.productos(id) on delete set null,
-  producto_nombre  text not null,
-  cantidad         double precision not null check (cantidad > 0),
-  precio_unitario  numeric(10,2) not null,
-  subtotal         numeric(10,2) not null
+  id                  uuid primary key default gen_random_uuid(),
+  compra_id           uuid not null references public.compras(id) on delete cascade,
+  producto_id         uuid references public.productos(id) on delete set null,
+  producto_nombre     text not null,
+  cantidad            double precision not null check (cantidad > 0),
+  modalidad           text not null default 'unidad',
+  unidades            double precision not null default 0,
+  presentacion_nombre text,
+  precio_unitario     numeric(10,2) not null,
+  subtotal            numeric(10,2) not null
 );
 
 -- Migracion en caliente (ver nota en la tabla productos).
 alter table public.detalle_compras alter column cantidad type double precision using cantidad::double precision;
+alter table public.detalle_compras add column if not exists modalidad text not null default 'unidad';
+alter table public.detalle_compras add column if not exists unidades double precision not null default 0;
+alter table public.detalle_compras add column if not exists presentacion_nombre text;
+-- Backfill unico (ver misma nota en detalle_ventas): filas de antes de esta
+-- migracion no tenian conversion por presentacion, asi que "cantidad" ya era
+-- la cantidad real en unidades base.
+update public.detalle_compras set unidades = cantidad where unidades = 0;
+
+comment on column public.detalle_compras.cantidad is
+  'Cantidad comprada tal como se ingreso: N cajas, N kg, N unidades o N de una presentacion flexible, segun modalidad.';
+comment on column public.detalle_compras.unidades is
+  'Unidades base que ingresaron al stock (cantidad * factor de la presentacion).';
+comment on column public.detalle_compras.presentacion_nombre is
+  'Nombre a mostrar de la presentacion usada, tomado en el momento de la compra. Null = unidad simple.';
 
 create index if not exists idx_det_compras on public.detalle_compras (compra_id);
 
@@ -522,16 +727,85 @@ create policy product_images_delete on storage.objects for delete
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
+-- HELPER: resuelve una "modalidad" de venta/compra contra un producto.
+-- ----------------------------------------------------------------------------
+-- Unico lugar (usado por registrar_venta, registrar_compra y ajustar_stock)
+-- que traduce una modalidad a (a) cuantas unidades base representa UNA de esa
+-- presentacion y (b) el nombre a mostrar — evita duplicar y desincronizar
+-- esta logica entre funciones, que fue el origen de bugs similares antes.
+--
+-- "modalidad" acepta:
+--   - 'unidad' (o vacio/null)     -> 1 unidad base, sin etiqueta.
+--   - 'caja'                      -> productos.unidades_por_caja (legacy).
+--   - 'saco'                      -> productos.kg_por_saco (legacy, granel).
+--   - el id (uuid) de una fila en producto_presentaciones -> su factor_unidades.
+-- Cualquier otro valor, o una presentacion inactiva/de otro producto, revienta
+-- con un mensaje claro en vez de dejar pasar un descuadre de stock silencioso.
+create or replace function public.resolver_presentacion(
+  p_producto  public.productos,
+  p_modalidad text,
+  out factor  numeric,
+  out nombre  text
+)
+language plpgsql
+stable
+security definer set search_path = public
+as $$
+declare
+  v_fila public.producto_presentaciones%rowtype;
+begin
+  if p_modalidad is null or p_modalidad = '' or p_modalidad = 'unidad' then
+    factor := 1;
+    nombre := null;
+    return;
+  end if;
+
+  if p_modalidad = 'caja' then
+    if not p_producto.tiene_caja then
+      raise exception '"%" no tiene venta por caja habilitada.', p_producto.nombre;
+    end if;
+    factor := coalesce(p_producto.unidades_por_caja, 1);
+    nombre := 'Caja';
+    return;
+  end if;
+
+  if p_modalidad = 'saco' then
+    if not p_producto.tiene_saco then
+      raise exception '"%" no tiene venta por saco habilitada.', p_producto.nombre;
+    end if;
+    factor := coalesce(p_producto.kg_por_saco, 1);
+    nombre := 'Saco';
+    return;
+  end if;
+
+  select * into v_fila from public.producto_presentaciones
+    where producto_id = p_producto.id and id::text = p_modalidad and activo = true;
+
+  if not found then
+    raise exception 'Presentacion no valida o ya no disponible para "%".', p_producto.nombre;
+  end if;
+
+  factor := v_fila.factor_unidades;
+  nombre := v_fila.nombre;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
 -- RPC 1: REGISTRAR VENTA (transaccional: stock + kardex + caja)
 -- ----------------------------------------------------------------------------
 create or replace function public.registrar_venta(
   p_items         jsonb,         -- [{ producto_id, cantidad, precio_unitario, modalidad }]
-  p_metodo        metodo_pago,
+  p_metodo        metodo_pago default null,
   p_descuento     numeric  default 0,
   p_pago_recibido numeric  default 0,
   p_caja_id       uuid     default null,
   p_cliente_id    uuid     default null,
-  p_tasa_igv      numeric  default 0.18
+  p_tasa_igv      numeric  default 0.18,
+  -- Pago mixto: [{ metodo, monto }, ...] con 2+ metodos distintos (ej.
+  -- Efectivo + Yape). Si es null/vacio, se usa el flujo de siempre
+  -- (p_metodo + p_pago_recibido, un solo metodo) — 100% compatible con
+  -- llamadas existentes que no conocen este parametro.
+  p_pagos         jsonb    default null
 )
 returns public.ventas
 language plpgsql
@@ -564,6 +838,21 @@ declare
   -- disponible, y el stock quedaba negativo sin ningun aviso.
   v_mapa        jsonb := '{}'::jsonb;
   v_req         record;
+  v_resuelto    record;
+  v_pres_nombre text;
+  -- Pagos (una o mas "piernas"): ver nota del parametro p_pagos arriba.
+  v_pagos            jsonb;
+  v_pago             jsonb;
+  v_pago_metodo       metodo_pago;
+  v_pago_monto        numeric(10,2);
+  v_suma_pagos         numeric(10,2) := 0;
+  v_vuelto             numeric(10,2);
+  v_vuelto_restante    numeric(10,2);
+  v_efectivo_total      numeric(10,2);
+  v_metodo_final        metodo_pago;
+  v_metodos_distintos   int;
+  v_hay_fiado           boolean;
+  v_contribucion        numeric(10,2);
 begin
   if jsonb_array_length(p_items) = 0 then
     raise exception 'El carrito esta vacio.';
@@ -575,13 +864,40 @@ begin
     select nombre into v_cli_nombre from public.clientes_credito where id = p_cliente_id;
   end if;
 
+  -- 0) Arma la lista unificada de pagos y valida que cubran el total. Se
+  --    hace ANTES de tocar stock/cabecera para fallar rapido y limpio.
+  if p_pagos is not null and jsonb_array_length(p_pagos) > 0 then
+    v_pagos := p_pagos;
+  else
+    if p_metodo is null then
+      raise exception 'Debes indicar un metodo de pago.';
+    end if;
+    v_pagos := jsonb_build_array(jsonb_build_object('metodo', p_metodo, 'monto', p_pago_recibido));
+  end if;
+
+  select count(distinct value->>'metodo') into v_metodos_distintos
+    from jsonb_array_elements(v_pagos);
+  v_hay_fiado := exists (select 1 from jsonb_array_elements(v_pagos) p where p->>'metodo' = 'fiado');
+
+  if v_hay_fiado and p_cliente_id is null then
+    raise exception 'Debes seleccionar un cliente para la parte al fiado.';
+  end if;
+
+  for v_pago in select * from jsonb_array_elements(v_pagos)
+  loop
+    v_pago_monto := (v_pago->>'monto')::numeric;
+    if v_pago_monto is null or v_pago_monto <= 0 then
+      raise exception 'Cada monto de pago debe ser mayor a 0.';
+    end if;
+    v_suma_pagos := v_suma_pagos + v_pago_monto;
+  end loop;
+
   -- 1) Bloquea cada producto involucrado y acumula subtotal + unidades
   --    totales requeridas por producto (bloqueo de filas para evitar carreras).
   --    "unidades" es siempre lo que realmente se descuenta del stock (calculado
-  --    aqui, en servidor, en vez de confiar en lo que mande el frontend):
-  --    - modalidad 'caja'  -> cantidad * unidades_por_caja del producto
-  --    - modalidad 'saco'  -> cantidad * kg_por_saco del producto (granel)
-  --    - modalidad 'unidad' -> cantidad tal cual (puede ser fraccion, ej. 0.5 kg si es granel)
+  --    aqui, en servidor, en vez de confiar en lo que mande el frontend) via
+  --    resolver_presentacion(): legacy 'caja'/'saco'/'unidad' o el id de una
+  --    presentacion flexible (Paquete, Bolsa, Media Caja, etc.).
   for v_item in select * from jsonb_array_elements(p_items)
   loop
     select * into v_producto from public.productos
@@ -598,11 +914,8 @@ begin
       raise exception 'Cantidad invalida para "%".', v_producto.nombre;
     end if;
 
-    v_unidades := case v_modalidad
-                    when 'caja' then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
-                    when 'saco' then v_cantidad * coalesce(v_producto.kg_por_saco, 1)
-                    else v_cantidad
-                  end;
+    select * into v_resuelto from public.resolver_presentacion(v_producto, v_modalidad);
+    v_unidades := v_resuelto.factor * v_cantidad;
     v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
 
     v_mapa := jsonb_set(
@@ -631,6 +944,24 @@ begin
   v_base     := round(v_total / (1 + p_tasa_igv), 2);
   v_igv      := round(v_total - v_base, 2);
 
+  -- 2b) Ahora que se conoce el total, valida que los pagos lo cubran.
+  --     "vuelto" solo puede salir de piernas en efectivo — Yape/tarjeta/
+  --     fiado son montos exactos, no dan cambio.
+  if v_suma_pagos < v_total then
+    raise exception 'La suma de los pagos (%) no cubre el total de la venta (%).', v_suma_pagos, v_total;
+  end if;
+  v_vuelto := round(v_suma_pagos - v_total, 2);
+
+  select coalesce(sum((p->>'monto')::numeric), 0) into v_efectivo_total
+    from jsonb_array_elements(v_pagos) p where p->>'metodo' = 'efectivo';
+
+  if v_vuelto > 0 and v_efectivo_total < v_vuelto then
+    raise exception 'El vuelto (%) no puede exceder el efectivo recibido (%).', v_vuelto, v_efectivo_total;
+  end if;
+
+  v_metodo_final := case when v_metodos_distintos > 1 then 'mixto'::metodo_pago
+                          else (v_pagos->0->>'metodo')::metodo_pago end;
+
   -- 3) Cabecera de la venta
   insert into public.ventas (
     cajero_id, cajero_nombre, caja_id, cliente_id, cliente_nombre,
@@ -638,7 +969,7 @@ begin
   ) values (
     auth.uid(), v_nombre, p_caja_id, p_cliente_id, v_cli_nombre,
     v_subtotal, coalesce(p_descuento, 0), v_igv, v_total,
-    p_metodo, p_pago_recibido, round(greatest(p_pago_recibido - v_total, 0), 2)
+    v_metodo_final, v_suma_pagos, v_vuelto
   ) returning * into v_venta;
 
   -- 4) Detalle + descuento de stock + kardex
@@ -648,19 +979,18 @@ begin
       where id = (v_item->>'producto_id')::uuid;
     v_cantidad  := (v_item->>'cantidad')::numeric;
     v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
-    v_unidades  := case v_modalidad
-                     when 'caja' then v_cantidad * coalesce(v_producto.unidades_por_caja, 1)
-                     when 'saco' then v_cantidad * coalesce(v_producto.kg_por_saco, 1)
-                     else v_cantidad
-                   end;
+    select * into v_resuelto from public.resolver_presentacion(v_producto, v_modalidad);
+    v_unidades    := v_resuelto.factor * v_cantidad;
+    v_pres_nombre := v_resuelto.nombre;
     v_precio    := coalesce((v_item->>'precio_unitario')::numeric, v_producto.precio_venta);
     v_sub       := round(v_precio * v_cantidad, 2);
 
     insert into public.detalle_ventas (
-      venta_id, producto_id, producto_nombre, sku, cantidad, modalidad, unidades, precio_unitario, subtotal
+      venta_id, producto_id, producto_nombre, sku, cantidad, modalidad, unidades,
+      precio_unitario, subtotal, presentacion_nombre
     ) values (
       v_venta.id, v_producto.id, v_producto.nombre, v_producto.sku,
-      v_cantidad, v_modalidad, v_unidades, v_precio, v_sub
+      v_cantidad, v_modalidad, v_unidades, v_precio, v_sub, v_pres_nombre
     );
 
     update public.productos
@@ -677,31 +1007,56 @@ begin
     );
   end loop;
 
-  -- 5) Caja y deuda del cliente fiado, DENTRO de la misma transaccion que la
-  --    venta. Antes esto se hacia con llamadas RPC separadas desde el
-  --    cliente (incrementar_caja / registrar_cargo_fiado) DESPUES de que
-  --    esta funcion ya habia confirmado la venta: si el navegador perdia
-  --    conexion justo entre esas llamadas (tipico en datos moviles de una
-  --    bodega), la venta quedaba registrada y el stock descontado
-  --    correctamente, pero el total de la caja o la deuda del cliente NO se
-  --    actualizaban — un descuadre invisible que no aparecia en ningun lado
-  --    hasta el cierre de caja. Ahora todo ocurre en un solo commit: o se
-  --    guarda completo, o no se guarda nada.
-  if p_caja_id is not null then
-    if p_metodo = 'efectivo' then
-      update public.cajas set total_efectivo = total_efectivo + v_total where id = p_caja_id;
-    elsif p_metodo = 'yape' then
-      update public.cajas set total_yape = total_yape + v_total where id = p_caja_id;
-    elsif p_metodo = 'fiado' then
-      update public.cajas set total_fiado = total_fiado + v_total where id = p_caja_id;
-    end if;
-  end if;
+  -- 5) Pagos + caja + deuda del cliente fiado, DENTRO de la misma
+  --    transaccion que la venta. Antes esto se hacia con llamadas RPC
+  --    separadas desde el cliente (incrementar_caja / registrar_cargo_fiado)
+  --    DESPUES de que esta funcion ya habia confirmado la venta: si el
+  --    navegador perdia conexion justo entre esas llamadas (tipico en datos
+  --    moviles de una bodega), la venta quedaba registrada y el stock
+  --    descontado correctamente, pero el total de la caja o la deuda del
+  --    cliente NO se actualizaban — un descuadre invisible que no aparecia
+  --    en ningun lado hasta el cierre de caja. Ahora todo ocurre en un solo
+  --    commit: o se guarda completo, o no se guarda nada.
+  --
+  --    Se inserta una fila en pagos_venta por cada pierna, con su
+  --    CONTRIBUCION real (neta del vuelto si es la pierna en efectivo la que
+  --    da cambio) — por eso sum(monto) de pagos_venta para esta venta
+  --    siempre da exactamente v_total, invariante que editar_venta() usa
+  --    para reescalar los pagos cuando el total cambia.
+  v_vuelto_restante := v_vuelto;
+  for v_pago in select * from jsonb_array_elements(v_pagos)
+  loop
+    v_pago_metodo := (v_pago->>'metodo')::metodo_pago;
+    v_pago_monto  := (v_pago->>'monto')::numeric;
 
-  if p_metodo = 'fiado' and p_cliente_id is not null then
-    update public.clientes_credito
-      set deuda_actual = deuda_actual + v_total
-      where id = p_cliente_id;
-  end if;
+    if v_pago_metodo = 'efectivo' and v_vuelto_restante > 0 then
+      v_contribucion := v_pago_monto - least(v_pago_monto, v_vuelto_restante);
+      v_vuelto_restante := v_vuelto_restante - (v_pago_monto - v_contribucion);
+    else
+      v_contribucion := v_pago_monto;
+    end if;
+
+    insert into public.pagos_venta (venta_id, metodo, monto)
+      values (v_venta.id, v_pago_metodo, v_contribucion);
+
+    if p_caja_id is not null then
+      if v_pago_metodo = 'efectivo' then
+        update public.cajas set total_efectivo = total_efectivo + v_contribucion where id = p_caja_id;
+      elsif v_pago_metodo = 'yape' then
+        update public.cajas set total_yape = total_yape + v_contribucion where id = p_caja_id;
+      elsif v_pago_metodo = 'fiado' then
+        update public.cajas set total_fiado = total_fiado + v_contribucion where id = p_caja_id;
+      end if;
+      -- tarjeta/plin/transferencia: sin columna dedicada en cajas (igual que
+      -- antes de los pagos mixtos); quedan en pagos_venta para el detalle.
+    end if;
+
+    if v_pago_metodo = 'fiado' then
+      update public.clientes_credito
+        set deuda_actual = deuda_actual + v_contribucion
+        where id = p_cliente_id;
+    end if;
+  end loop;
 
   return v_venta;
 end;
@@ -754,26 +1109,183 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 3: ANULAR VENTA (solo admin) - repone stock y marca anulada
+-- RPC 3: REGISTRAR COMPRA (transaccional: cabecera + detalle + stock + kardex)
 -- ----------------------------------------------------------------------------
-create or replace function public.anular_venta(p_venta_id uuid)
+-- Antes esto se hacia con 3 llamadas separadas desde el cliente (insert en
+-- compras, insert en detalle_compras, y un ajustar_stock() por cada item) sin
+-- ninguna transaccion que las uniera: si el navegador se quedaba sin
+-- conexion a mitad de camino (tipico en datos moviles), la compra quedaba a
+-- medias — el mismo tipo de descuadre invisible que ya se habia corregido
+-- para las ventas (ver registrar_venta). Ahora es una sola funcion: o se
+-- guarda todo (cabecera + detalle + stock + kardex), o no se guarda nada.
+-- Tambien resuelve la presentacion (caja/saco/flexible) de cada item igual
+-- que registrar_venta, para que "comprar 2 Cajas" o "1 Paquete Maestro"
+-- ingrese las unidades base correctas al inventario.
+create or replace function public.registrar_compra(
+  p_items            jsonb,  -- [{ producto_id, producto_nombre, cantidad, precio_unitario, modalidad }]
+  p_numero           text default null,
+  p_proveedor_id     uuid default null,
+  p_proveedor_nombre text default null,
+  p_fecha_compra     date default current_date,
+  p_estado           estado_compra default 'pendiente',
+  p_notas            text default null
+)
+returns public.compras
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_item        jsonb;
+  v_producto    public.productos%rowtype;
+  v_resuelto    record;
+  v_cantidad    numeric;
+  v_precio      numeric(10,2);
+  v_modalidad   text;
+  v_unidades    numeric;
+  v_pres_nombre text;
+  v_prod_id     uuid;
+  v_prod_nombre text;
+  v_sub         numeric(10,2);
+  v_total       numeric(10,2) := 0;
+  v_compra      public.compras%rowtype;
+begin
+  if not public.es_admin() then
+    raise exception 'Solo un administrador puede registrar compras.';
+  end if;
+
+  if jsonb_array_length(p_items) = 0 then
+    raise exception 'La compra no tiene productos.';
+  end if;
+
+  -- 1) Valida cada item y calcula el total (bloquea las filas de producto
+  --    involucradas para evitar carreras con otra compra/venta concurrente).
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    v_cantidad := (v_item->>'cantidad')::numeric;
+    v_precio   := coalesce((v_item->>'precio_unitario')::numeric, 0);
+
+    if v_cantidad is null or v_cantidad <= 0 then
+      raise exception 'Cantidad invalida para "%".', coalesce(v_item->>'producto_nombre', 'producto');
+    end if;
+    if v_precio < 0 then
+      raise exception 'Precio invalido para "%".', coalesce(v_item->>'producto_nombre', 'producto');
+    end if;
+
+    v_prod_id := nullif(v_item->>'producto_id', '')::uuid;
+    if v_prod_id is not null then
+      select * into v_producto from public.productos where id = v_prod_id for update;
+      if not found then
+        raise exception 'Producto % no existe.', v_prod_id;
+      end if;
+      v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
+      -- Valida que la presentacion exista y sea valida para este producto,
+      -- aunque el resultado no se use hasta el paso 3 (mismo criterio que
+      -- registrar_venta: fallar aqui, antes de tocar nada, no a mitad de la
+      -- insercion del detalle).
+      perform public.resolver_presentacion(v_producto, v_modalidad);
+    end if;
+
+    v_total := v_total + round(v_cantidad * v_precio, 2);
+  end loop;
+
+  -- 2) Cabecera de la compra
+  insert into public.compras (numero, proveedor_id, proveedor_nombre, total, estado, fecha_compra, notas)
+  values (
+    p_numero, p_proveedor_id, p_proveedor_nombre, round(v_total, 2),
+    coalesce(p_estado, 'pendiente'), coalesce(p_fecha_compra, current_date), p_notas
+  ) returning * into v_compra;
+
+  -- 3) Detalle + ingreso de stock + kardex, todo en la misma transaccion que
+  --    la cabecera recien insertada.
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    v_cantidad    := (v_item->>'cantidad')::numeric;
+    v_precio      := coalesce((v_item->>'precio_unitario')::numeric, 0);
+    v_modalidad   := coalesce(v_item->>'modalidad', 'unidad');
+    v_prod_id     := nullif(v_item->>'producto_id', '')::uuid;
+    v_prod_nombre := coalesce(v_item->>'producto_nombre', 'Producto');
+    v_unidades    := v_cantidad;
+    v_pres_nombre := null;
+
+    if v_prod_id is not null then
+      select * into v_producto from public.productos where id = v_prod_id;
+      select * into v_resuelto from public.resolver_presentacion(v_producto, v_modalidad);
+      v_unidades    := v_resuelto.factor * v_cantidad;
+      v_pres_nombre := v_resuelto.nombre;
+      v_prod_nombre := v_producto.nombre;
+    end if;
+
+    v_sub := round(v_cantidad * v_precio, 2);
+
+    insert into public.detalle_compras (
+      compra_id, producto_id, producto_nombre, cantidad, modalidad, unidades,
+      presentacion_nombre, precio_unitario, subtotal
+    ) values (
+      v_compra.id, v_prod_id, v_prod_nombre, v_cantidad, v_modalidad, v_unidades,
+      v_pres_nombre, v_precio, v_sub
+    );
+
+    if v_prod_id is not null then
+      update public.productos
+        set stock_actual = stock_actual + v_unidades
+        where id = v_prod_id;
+
+      insert into public.movimientos_inventario (
+        producto_id, producto_nombre, tipo, cantidad,
+        stock_previo, stock_nuevo, motivo, usuario_id
+      ) values (
+        v_prod_id, v_producto.nombre, 'entrada', v_unidades,
+        v_producto.stock_actual, v_producto.stock_actual + v_unidades,
+        'Compra ' || coalesce('#' || p_numero, left(v_compra.id::text, 8)), auth.uid()
+      );
+    end if;
+  end loop;
+
+  return v_compra;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- RPC 4: ANULAR VENTA (administrador o cajero) - repone stock, revierte caja
+-- y deuda del cliente, y marca anulada
+-- ----------------------------------------------------------------------------
+-- Abierta a cualquier usuario autenticado ACTIVO (antes: solo admin) —
+-- requisito explicito de negocio. El motivo es obligatorio y queda en
+-- auditoria_ventas junto con quien anulo y cuando, como salvaguarda de este
+-- permiso mas amplio.
+-- Se agrego el parametro p_motivo (antes no existia): "create or replace"
+-- con un parametro nuevo sin default crea un OVERLOAD en vez de reemplazar
+-- la funcion — hay que tumbar la firma vieja primero para que no queden
+-- ambas versiones coexistiendo (la vieja, admin-only y sin motivo, seguiria
+-- siendo invocable).
+drop function if exists public.anular_venta(uuid);
+
+create or replace function public.anular_venta(p_venta_id uuid, p_motivo text)
 returns public.ventas
 language plpgsql
 security definer set search_path = public
 as $$
 declare
-  v_venta  public.ventas%rowtype;
-  v_det    record;
-  v_prod   public.productos%rowtype;
+  v_venta   public.ventas%rowtype;
+  v_det     record;
+  v_prod    public.productos%rowtype;
+  v_pago    record;
+  v_activo  boolean;
+  v_nombre  text;
 begin
-  if not public.es_admin() then
-    raise exception 'Solo un administrador puede anular ventas.';
+  select activo, nombre into v_activo, v_nombre from public.perfiles where id = auth.uid();
+  if not coalesce(v_activo, false) then
+    raise exception 'Tu usuario no esta autorizado para anular ventas.';
+  end if;
+  if p_motivo is null or btrim(p_motivo) = '' then
+    raise exception 'Debes indicar el motivo de la anulacion.';
   end if;
 
   select * into v_venta from public.ventas where id = p_venta_id for update;
   if not found then raise exception 'Venta no encontrada.'; end if;
   if v_venta.anulada then raise exception 'La venta ya esta anulada.'; end if;
 
+  -- 1) Repone el stock vendido en cada linea.
   for v_det in
     select * from public.detalle_ventas where venta_id = p_venta_id
   loop
@@ -800,15 +1312,290 @@ begin
     end if;
   end loop;
 
+  -- 2) Revierte caja y deuda del cliente, pierna de pago por pierna (ver
+  --    tabla pagos_venta) — cubre por igual ventas de un solo metodo y
+  --    ventas mixtas, viejas y nuevas (toda venta no anulada tiene 1+ filas
+  --    ahi, ver backfill al crear la tabla).
+  for v_pago in select * from public.pagos_venta where venta_id = p_venta_id
+  loop
+    if v_venta.caja_id is not null then
+      if v_pago.metodo = 'efectivo' then
+        update public.cajas set total_efectivo = total_efectivo - v_pago.monto where id = v_venta.caja_id;
+      elsif v_pago.metodo = 'yape' then
+        update public.cajas set total_yape = total_yape - v_pago.monto where id = v_venta.caja_id;
+      elsif v_pago.metodo = 'fiado' then
+        update public.cajas set total_fiado = total_fiado - v_pago.monto where id = v_venta.caja_id;
+      end if;
+    end if;
+    if v_pago.metodo = 'fiado' and v_venta.cliente_id is not null then
+      update public.clientes_credito
+        set deuda_actual = greatest(deuda_actual - v_pago.monto, 0)
+        where id = v_venta.cliente_id;
+    end if;
+  end loop;
+
   update public.ventas set anulada = true where id = p_venta_id
     returning * into v_venta;
+
+  -- 3) Auditoria: quien, cuando, por que.
+  insert into public.auditoria_ventas (
+    venta_id, venta_numero, accion, usuario_id, usuario_nombre, motivo, detalle
+  ) values (
+    v_venta.id, v_venta.numero, 'anulada', auth.uid(), v_nombre, p_motivo,
+    jsonb_build_object('total', v_venta.total, 'metodo', v_venta.metodo, 'cliente_id', v_venta.cliente_id)
+  );
 
   return v_venta;
 end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 4: INCREMENTAR CAJA (acumula totales por metodo de pago)
+-- RPC 4b: EDITAR VENTA (administrador o cajero) - reemplaza los productos de
+-- una venta existente SIN anularla: repone el stock viejo, valida y descuenta
+-- el nuevo, recalcula subtotal/IGV/total, y ajusta caja + deuda del cliente
+-- por la diferencia reescalando proporcionalmente los pagos originales (ver
+-- tabla pagos_venta) — nunca hay que volver a pedirle el pago al cliente.
+-- ----------------------------------------------------------------------------
+create or replace function public.editar_venta(
+  p_venta_id  uuid,
+  p_items     jsonb,          -- mismo formato que registrar_venta
+  p_motivo    text,
+  p_descuento numeric default null,  -- null = mantiene el descuento actual de la venta
+  p_tasa_igv  numeric default 0.18
+)
+returns public.ventas
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_venta          public.ventas%rowtype;
+  v_activo         boolean;
+  v_nombre         text;
+  v_det            record;
+  v_prod           public.productos%rowtype;
+  v_item           jsonb;
+  v_cantidad       numeric;
+  v_modalidad      text;
+  v_unidades       numeric;
+  v_precio         numeric(10,2);
+  v_sub            numeric(10,2);
+  v_subtotal       numeric(10,2) := 0;
+  v_total          numeric(10,2);
+  v_igv            numeric(10,2);
+  v_base           numeric(10,2);
+  v_descuento      numeric(10,2);
+  v_mapa           jsonb := '{}'::jsonb;
+  v_req            record;
+  v_resuelto       record;
+  v_pres_nombre    text;
+  v_total_anterior numeric(10,2);
+  v_factor         numeric;
+  v_pago           record;
+  v_nuevo_monto    numeric(10,2);
+  v_restante       numeric(10,2);
+  v_ultimo_id      uuid;
+  v_detalle_json   jsonb;
+  v_pago_recibido  numeric(10,2);
+begin
+  select activo, nombre into v_activo, v_nombre from public.perfiles where id = auth.uid();
+  if not coalesce(v_activo, false) then
+    raise exception 'Tu usuario no esta autorizado para editar ventas.';
+  end if;
+  if p_motivo is null or btrim(p_motivo) = '' then
+    raise exception 'Debes indicar el motivo de la edicion.';
+  end if;
+  if jsonb_array_length(p_items) = 0 then
+    raise exception 'La venta debe tener al menos un producto.';
+  end if;
+
+  select * into v_venta from public.ventas where id = p_venta_id for update;
+  if not found then raise exception 'Venta no encontrada.'; end if;
+  if v_venta.anulada then raise exception 'No se puede editar una venta anulada.'; end if;
+
+  v_total_anterior := v_venta.total;
+  if v_total_anterior <= 0 then
+    raise exception 'Esta venta no se puede editar (total original invalido).';
+  end if;
+
+  -- Snapshot del detalle anterior, para dejar registro de que cambio.
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'producto_nombre', d.producto_nombre, 'cantidad', d.cantidad,
+      'modalidad', d.modalidad, 'precio_unitario', d.precio_unitario, 'subtotal', d.subtotal
+    )), '[]'::jsonb) into v_detalle_json
+  from public.detalle_ventas d where d.venta_id = p_venta_id;
+
+  -- 1) Repone el stock de las lineas ACTUALES (equivale a una anulacion
+  --    parcial) y las borra — las nuevas se insertan mas abajo, ya
+  --    validadas contra el stock recien repuesto.
+  for v_det in select * from public.detalle_ventas where venta_id = p_venta_id
+  loop
+    if v_det.producto_id is not null then
+      select * into v_prod from public.productos where id = v_det.producto_id for update;
+      if found then
+        update public.productos set stock_actual = stock_actual + v_det.unidades where id = v_det.producto_id
+          returning * into v_prod;
+        insert into public.movimientos_inventario (
+          producto_id, producto_nombre, tipo, cantidad, stock_previo, stock_nuevo, motivo, usuario_id
+        ) values (
+          v_prod.id, v_prod.nombre, 'devolucion', v_det.unidades,
+          v_prod.stock_actual - v_det.unidades, v_prod.stock_actual,
+          'Edicion venta #' || v_venta.numero || ' (linea anterior revertida)', auth.uid()
+        );
+      end if;
+    end if;
+  end loop;
+  delete from public.detalle_ventas where venta_id = p_venta_id;
+
+  -- 2) Valida los items NUEVOS y calcula el nuevo total (misma logica de
+  --    registrar_venta: bloquea filas, acumula por producto, valida stock).
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    select * into v_prod from public.productos where id = (v_item->>'producto_id')::uuid for update;
+    if not found then raise exception 'Producto % no existe.', v_item->>'producto_id'; end if;
+
+    v_cantidad  := (v_item->>'cantidad')::numeric;
+    v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
+    if v_cantidad is null or v_cantidad <= 0 then
+      raise exception 'Cantidad invalida para "%".', v_prod.nombre;
+    end if;
+
+    select * into v_resuelto from public.resolver_presentacion(v_prod, v_modalidad);
+    v_unidades := v_resuelto.factor * v_cantidad;
+    v_precio   := coalesce((v_item->>'precio_unitario')::numeric, v_prod.precio_venta);
+
+    v_mapa := jsonb_set(v_mapa, array[v_prod.id::text],
+      to_jsonb(coalesce((v_mapa->>v_prod.id::text)::numeric, 0) + v_unidades));
+
+    v_subtotal := v_subtotal + (v_precio * v_cantidad);
+  end loop;
+
+  for v_req in select key as producto_id, value::numeric as unidades from jsonb_each_text(v_mapa)
+  loop
+    select * into v_prod from public.productos where id = v_req.producto_id::uuid;
+    if v_prod.stock_actual < v_req.unidades then
+      raise exception 'Stock insuficiente para "%": disponible % %, solicitado %',
+        v_prod.nombre, v_prod.stock_actual, v_prod.unidad, v_req.unidades;
+    end if;
+  end loop;
+
+  v_descuento := coalesce(p_descuento, v_venta.descuento);
+  v_subtotal  := round(v_subtotal, 2);
+  v_total     := round(greatest(v_subtotal - v_descuento, 0), 2);
+  if v_total <= 0 then
+    raise exception 'El total de la venta editada debe ser mayor a 0.';
+  end if;
+  v_base := round(v_total / (1 + p_tasa_igv), 2);
+  v_igv  := round(v_total - v_base, 2);
+
+  -- 3) Inserta las lineas nuevas + descuenta stock + kardex (igual que registrar_venta).
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    select * into v_prod from public.productos where id = (v_item->>'producto_id')::uuid;
+    v_cantidad  := (v_item->>'cantidad')::numeric;
+    v_modalidad := coalesce(v_item->>'modalidad', 'unidad');
+    select * into v_resuelto from public.resolver_presentacion(v_prod, v_modalidad);
+    v_unidades    := v_resuelto.factor * v_cantidad;
+    v_pres_nombre := v_resuelto.nombre;
+    v_precio    := coalesce((v_item->>'precio_unitario')::numeric, v_prod.precio_venta);
+    v_sub       := round(v_precio * v_cantidad, 2);
+
+    insert into public.detalle_ventas (
+      venta_id, producto_id, producto_nombre, sku, cantidad, modalidad, unidades,
+      precio_unitario, subtotal, presentacion_nombre
+    ) values (
+      v_venta.id, v_prod.id, v_prod.nombre, v_prod.sku,
+      v_cantidad, v_modalidad, v_unidades, v_precio, v_sub, v_pres_nombre
+    );
+
+    update public.productos set stock_actual = stock_actual - v_unidades where id = v_prod.id;
+
+    insert into public.movimientos_inventario (
+      producto_id, producto_nombre, tipo, cantidad, stock_previo, stock_nuevo, motivo, usuario_id
+    ) values (
+      v_prod.id, v_prod.nombre, 'venta', -v_unidades,
+      v_prod.stock_actual, v_prod.stock_actual - v_unidades,
+      'Edicion venta #' || v_venta.numero || ' (linea nueva)', auth.uid()
+    );
+  end loop;
+
+  -- 4) Reescala los pagos originales proporcionalmente al nuevo total y
+  --    ajusta caja/deuda por la DIFERENCIA (resta el aporte viejo, suma el
+  --    nuevo). La ultima pierna se ajusta al resto EXACTO en vez de un
+  --    round(monto*factor) para que la suma de todas de exactamente
+  --    v_total, sin arrastrar centavos de diferencia por redondeo.
+  v_factor := v_total / v_total_anterior;
+
+  select id into v_ultimo_id from public.pagos_venta where venta_id = p_venta_id
+    order by creado_en desc, id desc limit 1;
+
+  if v_ultimo_id is null then
+    raise exception
+      'Esta venta no tiene registro de pagos — ejecuta supabase/add_ventas_avanzadas.sql antes de editar ventas.';
+  end if;
+
+  v_restante := v_total;
+  for v_pago in select * from public.pagos_venta where venta_id = p_venta_id order by creado_en, id
+  loop
+    if v_pago.id = v_ultimo_id then
+      v_nuevo_monto := v_restante;
+    else
+      v_nuevo_monto := round(v_pago.monto * v_factor, 2);
+    end if;
+    v_restante := v_restante - v_nuevo_monto;
+
+    if v_venta.caja_id is not null then
+      if v_pago.metodo = 'efectivo' then
+        update public.cajas set total_efectivo = total_efectivo - v_pago.monto + v_nuevo_monto where id = v_venta.caja_id;
+      elsif v_pago.metodo = 'yape' then
+        update public.cajas set total_yape = total_yape - v_pago.monto + v_nuevo_monto where id = v_venta.caja_id;
+      elsif v_pago.metodo = 'fiado' then
+        update public.cajas set total_fiado = total_fiado - v_pago.monto + v_nuevo_monto where id = v_venta.caja_id;
+      end if;
+    end if;
+
+    if v_pago.metodo = 'fiado' and v_venta.cliente_id is not null then
+      update public.clientes_credito
+        set deuda_actual = greatest(deuda_actual - v_pago.monto + v_nuevo_monto, 0)
+        where id = v_venta.cliente_id;
+    end if;
+
+    -- El CHECK monto > 0 de pagos_venta actua como ultima red de seguridad:
+    -- si el redondeo dejara una pierna en 0 o negativa, la transaccion entera
+    -- se revierte con un error claro en vez de dejar un pago mal registrado.
+    update public.pagos_venta set monto = v_nuevo_monto where id = v_pago.id;
+  end loop;
+
+  -- 5) Actualiza la cabecera de la venta. pago_recibido/vuelto se mantienen
+  --    si ya cubrian el nuevo total, o se ajustan al nuevo total si no.
+  v_pago_recibido := greatest(v_venta.pago_recibido, v_total);
+  update public.ventas set
+    subtotal      = v_subtotal,
+    descuento     = v_descuento,
+    igv           = v_igv,
+    total         = v_total,
+    pago_recibido = v_pago_recibido,
+    vuelto        = greatest(v_pago_recibido - v_total, 0),
+    editada       = true
+  where id = p_venta_id
+  returning * into v_venta;
+
+  -- 6) Auditoria: quien, cuando, por que y que cambio.
+  insert into public.auditoria_ventas (
+    venta_id, venta_numero, accion, usuario_id, usuario_nombre, motivo, detalle
+  ) values (
+    v_venta.id, v_venta.numero, 'editada', auth.uid(), v_nombre, p_motivo,
+    jsonb_build_object(
+      'total_anterior', v_total_anterior, 'total_nuevo', v_total,
+      'detalle_anterior', v_detalle_json
+    )
+  );
+
+  return v_venta;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- RPC 5: INCREMENTAR CAJA (acumula totales por metodo de pago)
 -- ----------------------------------------------------------------------------
 create or replace function public.incrementar_caja(
   p_caja_id uuid,
@@ -831,7 +1618,7 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 5: REGISTRAR CARGO FIADO (suma deuda al cliente)
+-- RPC 6: REGISTRAR CARGO FIADO (suma deuda al cliente)
 -- ----------------------------------------------------------------------------
 create or replace function public.registrar_cargo_fiado(
   p_cliente_id uuid,
@@ -857,7 +1644,7 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 6: REGISTRAR ABONO CLIENTE (resta deuda, guarda el pago y lo consolida
+-- RPC 7: REGISTRAR ABONO CLIENTE (resta deuda, guarda el pago y lo consolida
 -- en la caja activa como ingreso por cobranza)
 -- ----------------------------------------------------------------------------
 -- Transaccional: valida, actualiza la deuda del cliente, inserta el abono y
@@ -933,7 +1720,7 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 7: REGISTRAR EGRESO (gasto del negocio o salida de caja)
+-- RPC 8: REGISTRAR EGRESO (gasto del negocio o salida de caja)
 -- ----------------------------------------------------------------------------
 -- Todas las escrituras a "egresos" pasan por este RPC (no hay politica RLS de
 -- insert directa) para que el descuento del efectivo esperado de la caja
@@ -996,7 +1783,7 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- RPC 8: ELIMINAR EGRESO (solo admin) - revierte el efectivo esperado si aplica
+-- RPC 9: ELIMINAR EGRESO (solo admin) - revierte el efectivo esperado si aplica
 -- ----------------------------------------------------------------------------
 create or replace function public.eliminar_egreso(p_id uuid)
 returns void
@@ -1031,10 +1818,13 @@ $$;
 alter table public.perfiles                enable row level security;
 alter table public.categorias              enable row level security;
 alter table public.productos               enable row level security;
+alter table public.producto_presentaciones enable row level security;
 alter table public.cajas                   enable row level security;
 alter table public.clientes_credito        enable row level security;
 alter table public.ventas                  enable row level security;
 alter table public.detalle_ventas          enable row level security;
+alter table public.pagos_venta             enable row level security;
+alter table public.auditoria_ventas        enable row level security;
 alter table public.movimientos_inventario  enable row level security;
 alter table public.pagos_credito           enable row level security;
 alter table public.proveedores             enable row level security;
@@ -1068,6 +1858,15 @@ drop policy if exists productos_write on public.productos;
 create policy productos_write on public.productos for all
   to authenticated using (public.es_admin()) with check (public.es_admin());
 
+-- PRESENTACIONES DE PRODUCTO (lectura para todos — los cajeros la necesitan
+-- para vender por Caja/Paquete/Bolsa/etc.; escritura solo administrador)
+drop policy if exists presentaciones_select on public.producto_presentaciones;
+create policy presentaciones_select on public.producto_presentaciones for select
+  to authenticated using (true);
+drop policy if exists presentaciones_write on public.producto_presentaciones;
+create policy presentaciones_write on public.producto_presentaciones for all
+  to authenticated using (public.es_admin()) with check (public.es_admin());
+
 -- CAJAS
 drop policy if exists cajas_select on public.cajas;
 create policy cajas_select on public.cajas for select
@@ -1083,9 +1882,20 @@ create policy cajas_update on public.cajas for update
 drop policy if exists clientes_select on public.clientes_credito;
 create policy clientes_select on public.clientes_credito for select
   to authenticated using (true);
+-- Reemplazada por 3 politicas granulares (insert/update/delete) mas abajo:
+-- registro rapido de clientes desde el cobro (POS) requiere que un cajero
+-- pueda CREAR un cliente nuevo, pero solo un administrador debe poder
+-- modificar el limite de credito o desactivar clientes existentes.
 drop policy if exists clientes_write on public.clientes_credito;
-create policy clientes_write on public.clientes_credito for all
+drop policy if exists clientes_insert on public.clientes_credito;
+create policy clientes_insert on public.clientes_credito for insert
+  to authenticated with check (true);
+drop policy if exists clientes_update on public.clientes_credito;
+create policy clientes_update on public.clientes_credito for update
   to authenticated using (public.es_admin()) with check (public.es_admin());
+drop policy if exists clientes_delete on public.clientes_credito;
+create policy clientes_delete on public.clientes_credito for delete
+  to authenticated using (public.es_admin());
 
 -- VENTAS
 drop policy if exists ventas_select on public.ventas;
@@ -1101,6 +1911,18 @@ create policy ventas_update on public.ventas for update
 -- DETALLE VENTAS
 drop policy if exists detalle_select on public.detalle_ventas;
 create policy detalle_select on public.detalle_ventas for select
+  to authenticated using (true);
+
+-- PAGOS DE VENTA (sin politica de escritura a proposito: solo se escriben
+-- desde registrar_venta/editar_venta/anular_venta, que son security definer)
+drop policy if exists pagos_venta_select on public.pagos_venta;
+create policy pagos_venta_select on public.pagos_venta for select
+  to authenticated using (true);
+
+-- AUDITORIA DE VENTAS (lectura para todo el personal — transparencia sobre
+-- quien anulo/edito que y por que; escritura solo via RPC security definer)
+drop policy if exists auditoria_ventas_select on public.auditoria_ventas;
+create policy auditoria_ventas_select on public.auditoria_ventas for select
   to authenticated using (true);
 
 -- MOVIMIENTOS INVENTARIO
