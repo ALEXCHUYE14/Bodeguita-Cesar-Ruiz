@@ -37,6 +37,19 @@ export default defineConfig({
             handler: 'NetworkFirst',
             options: { cacheName: 'supabase-api', networkTimeoutSeconds: 5 },
           },
+          {
+            // Fotos de producto (Supabase Storage, bucket publico). Se
+            // suben con cacheControl de 1 año y la URL solo cambia cuando
+            // se sube una foto nueva (ver useProductoImagen.ts) — seguro
+            // servirlas siempre de cache sin ir a la red.
+            urlPattern: ({ url }) => url.pathname.startsWith('/storage/v1/object/public'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'supabase-storage',
+              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

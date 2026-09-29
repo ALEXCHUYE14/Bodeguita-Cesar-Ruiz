@@ -705,9 +705,17 @@ insert into storage.buckets (id, name, public)
 values ('product-images', 'product-images', true)
 on conflict (id) do nothing;
 
+-- El bucket es publico (linea de arriba), asi que servir un archivo por su
+-- URL publica NO pasa por esta politica — Storage lo hace por una ruta
+-- aparte que ignora RLS. Esta politica solo gobierna poder LISTAR el
+-- contenido del bucket via la API de Storage; el frontend nunca lista este
+-- bucket (solo sube/borra por nombre de archivo conocido, ver
+-- useProductoImagen.ts), asi que restringirla a "authenticated" cierra el
+-- aviso "Los clientes pueden listar todos los archivos en este bucket" sin
+-- afectar que las fotos se sigan viendo publicamente.
 drop policy if exists product_images_select on storage.objects;
 create policy product_images_select on storage.objects for select
-  using (bucket_id = 'product-images');
+  to authenticated using (bucket_id = 'product-images');
 
 drop policy if exists product_images_insert on storage.objects;
 create policy product_images_insert on storage.objects for insert

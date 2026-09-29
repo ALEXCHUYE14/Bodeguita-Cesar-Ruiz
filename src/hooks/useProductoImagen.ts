@@ -67,7 +67,11 @@ export function useProductoImagen() {
 
       const { error } = await supabase.storage
         .from(BUCKET)
-        .upload(path, blob, { upsert: true, contentType: 'image/jpeg' })
+        // cacheControl largo (1 año): la URL guardada en productos.image_url
+        // es estable por producto — solo cambia cuando se sube una foto
+        // nueva, y ahí el "?t=" de mas abajo ya fuerza a los navegadores/CDN
+        // a pedir el archivo de nuevo en vez de servir el cache viejo.
+        .upload(path, blob, { upsert: true, contentType: 'image/jpeg', cacheControl: '31536000' })
 
       if (error) throw new Error(error.message)
 
