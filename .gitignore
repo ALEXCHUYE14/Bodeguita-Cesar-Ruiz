@@ -11,3 +11,11 @@ dist-ssr
 !.vscode/extensions.json
 
 .vercel
+
+# Vite carga vite.config.ts directamente — vite.config.js/.d.ts son solo
+# salida de 'tsc -b' (ver tsconfig.node.json) y nunca deben versionarse:
+# si quedan commiteados, Vite los prefiere sobre el .ts y los cambios
+# hechos solo en vite.config.ts dejan de aplicarse en builds reales.
+vite.config.js
+vite.config.d.ts
+supabase/.temp

@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   PackageX,
   Trash2,
-  Download,
   Camera,
   Lock,
 } from 'lucide-react'
@@ -20,9 +19,9 @@ import { Sheet } from '@/components/ui/Sheet'
 import { useToast } from '@/components/ui/Toast'
 import { ProductForm } from '@/components/inventory/ProductForm'
 import { StockAdjust } from '@/components/inventory/StockAdjust'
+import { InventarioBulkTools } from '@/components/inventory/InventarioBulkTools'
 import { CameraScanner } from '@/components/pos/CameraScanner'
-import { money, cx, fechaHora, cantidad, etiquetaUnidad, ymd } from '@/utils/format'
-import { descargarCSV } from '@/utils/csv'
+import { money, cx, fechaHora, cantidad, etiquetaUnidad } from '@/utils/format'
 import type { MovimientoInventario, Producto } from '@/types/database'
 
 // Clave requerida para confirmar edicion/eliminacion de un producto ya
@@ -65,36 +64,6 @@ export function Inventario() {
     0,
   )
   const cantBajo = productos.filter((p) => p.stock_actual <= p.stock_minimo).length
-
-  function exportarCSV() {
-    const filas: (string | number)[][] = [
-      ['Reporte de inventario', ymd(new Date())],
-      [],
-      [
-        'SKU', 'Nombre', 'Categoria', 'Tipo de venta', 'Unidad',
-        'Precio compra', 'Precio venta', 'Stock actual', 'Stock minimo',
-        'Valorizado (compra x stock)', 'Vence',
-      ],
-      ...productos.map((p) => [
-        p.sku,
-        p.nombre,
-        p.categorias?.nombre ?? '',
-        p.tipo_venta === 'granel' ? 'Granel' : 'Unidad',
-        p.unidad,
-        p.precio_compra.toFixed(2),
-        p.precio_venta.toFixed(2),
-        cantidad(p.stock_actual),
-        cantidad(p.stock_minimo),
-        (p.precio_compra * p.stock_actual).toFixed(2),
-        p.fecha_vencimiento ?? '',
-      ]),
-      [],
-      ['Total productos', productos.length],
-      ['Valorizado total', totalValorizado.toFixed(2)],
-    ]
-    descargarCSV(`inventario_${ymd(new Date())}.csv`, filas)
-    toast.exito('Inventario descargado')
-  }
 
   function abrirNuevo() {
     setEditando(null)
@@ -185,10 +154,8 @@ export function Inventario() {
             {productos.length} productos · valorizado {money(totalValorizado)}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={exportarCSV} disabled={productos.length === 0}>
-            <Download className="size-4" /> <span className="hidden sm:inline">Descargar</span>
-          </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <InventarioBulkTools esAdmin={esAdmin} onCambios={recargar} />
           <Button variant="outline" size="sm" onClick={() => setScannerAbierto(true)}>
             <Camera className="size-4" /> <span className="hidden sm:inline">Escanear</span>
           </Button>

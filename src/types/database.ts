@@ -383,6 +383,7 @@ export interface Database {
         Returns: Egreso
       }
       eliminar_egreso: { Args: { p_id: string }; Returns: void }
+      importar_inventario: { Args: { p_filas: unknown }; Returns: unknown }
       registrar_compra: {
         Args: {
           p_items: unknown

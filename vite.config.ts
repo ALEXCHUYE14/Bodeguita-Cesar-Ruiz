@@ -28,6 +28,19 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp3}'],
+        // xlsx/jszip (herramientas en bloque de Inventario: Exportar/Importar
+        // Excel, Descargar/Subir fotos) se cargan con import() dinamico y
+        // viven en su propio chunk (ver manualChunks mas abajo) — se
+        // excluyen del precache para que NINGUN dispositivo los descargue
+        // de entrada al instalar el service worker si nunca usa esos
+        // botones. Quien si los usa los cachea despues de la primera vez
+        // via la regla CacheFirst de abajo.
+        // Coincide por substring, no por un nombre de archivo exacto: el
+        // bundler (Rolldown) a veces nombra el chunk de jszip
+        // "jszip.min-HASH.js" en vez de "jszip-HASH.js" — verificar el
+        // nombre real tras cada build (ver dist/assets/ despues de
+        // `npm run build`) si esto llega a cambiar de nuevo.
+        globIgnores: ['**/assets/*xlsx*.js', '**/assets/*jszip*.js'],
         // Borra las caches de versiones anteriores al activar el nuevo
         // service worker, para que nunca sirva JS/CSS de un despliegue viejo.
         cleanupOutdatedCaches: true,
@@ -47,6 +60,18 @@ export default defineConfig({
             options: {
               cacheName: 'supabase-storage',
               expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Chunks de xlsx/jszip excluidos del precache de arriba: se
+            // piden por red la primera vez que alguien usa Exportar/Importar
+            // Excel o Descargar/Subir fotos, y quedan cacheados un año.
+            urlPattern: ({ url }) => /\/assets\/.*(xlsx|jszip).*\.js$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'herramientas-inventario',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
@@ -73,6 +98,13 @@ export default defineConfig({
             if (id.includes('recharts')) return 'charts'
             if (id.includes('html5-qrcode')) return 'scanner'
             if (id.includes('@supabase')) return 'supabase'
+            // xlsx/jszip solo se importan con import() dinamico (ver
+            // inventarioExcel.ts / inventarioFotos.ts) — nombrarlos aqui no
+            // los suma al paquete principal (siguen en su propio chunk, solo
+            // se le da un nombre estable en vez de un hash autogenerado),
+            // para que globIgnores/runtimeCaching de arriba los reconozcan.
+            if (id.includes('xlsx')) return 'xlsx'
+            if (id.includes('jszip')) return 'jszip'
           }
         },
       },
