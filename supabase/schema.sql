@@ -1873,6 +1873,14 @@ declare
   v_fecha_venc          text;
   v_activo              boolean;
   v_existente           public.productos%rowtype;
+  -- Guarda si el producto ya existia apenas se sabe (ver nota junto al
+  -- "select ... for update" de abajo) — NUNCA se usa "if found" para esto
+  -- mas adelante en la fila: FOUND es una variable global de la funcion que
+  -- cualquier otro select/insert/for posterior (la busqueda de categoria, el
+  -- loop de validacion de presentaciones) pisa sin avisar, y entonces "if
+  -- found" terminaria preguntando por el resultado de ESE otro comando, no
+  -- por si el producto existia.
+  v_producto_existia    boolean;
   v_producto_id         uuid;
   v_accion              text;
   v_mensaje             text;
@@ -1905,6 +1913,7 @@ begin
       end if;
 
       select * into v_existente from public.productos where sku = v_sku for update;
+      v_producto_existia := found; -- capturado YA, antes de que otro comando pise FOUND
 
       v_nombre            := nullif(btrim(coalesce(v_fila->>'nombre', '')), '');
       v_categoria         := nullif(btrim(coalesce(v_fila->>'categoria', '')), '');
@@ -1988,7 +1997,7 @@ begin
         end loop;
       end if;
 
-      if found then
+      if v_producto_existia then
         -- ── ACTUALIZAR: celda vacia (NULL aqui) = no tocar esa columna ──
         v_producto_id := v_existente.id;
 

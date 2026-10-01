@@ -18,28 +18,6 @@
 --  resolver_presentacion/producto_presentaciones y su trigger de validacion).
 -- ============================================================================
 
--- RPC 10: IMPORTAR INVENTARIO (solo admin) - alta/actualizacion masiva desde
--- el .xlsx exportado por Inventario > Exportar Excel
--- ----------------------------------------------------------------------------
--- Cada fila se procesa en su propio bloque BEGIN/EXCEPTION (= un SAVEPOINT
--- implicito en PL/pgSQL): si una fila tiene datos invalidos, SOLO esa fila
--- se revierte y se reporta como error — las demas filas del archivo se
--- procesan igual, sin que una fila mala tumbe la importacion completa.
---
--- Reglas de "celda vacia":
---   - Actualizar un producto existente: celda vacia = no tocar ese campo
---     (nunca lo borra). Se logra con coalesce(valor_nuevo, valor_actual),
---     donde valor_nuevo ya viene en NULL desde nullif(..,'') cuando la
---     celda estaba vacia o la clave no vino en el JSON.
---   - Crear un producto nuevo (SKU no existe): celda vacia = usa el mismo
---     default que tiene la columna en la tabla productos.
---
--- El stock nunca se pisa en silencio: si la fila trae un stock_actual
--- distinto al que ya tiene un producto EXISTENTE, se aplica via
--- ajustar_stock() (mismo camino que un ajuste manual desde Inventario),
--- que deja el movimiento correspondiente en el kardex. Un producto NUEVO
--- simplemente nace con ese stock (igual que el alta manual en ProductForm,
--- que tampoco genera kardex para el stock inicial).
 create or replace function public.importar_inventario(p_filas jsonb)
 returns jsonb
 language plpgsql
@@ -70,6 +48,14 @@ declare
   v_fecha_venc          text;
   v_activo              boolean;
   v_existente           public.productos%rowtype;
+  -- Guarda si el producto ya existia apenas se sabe (ver nota junto al
+  -- "select ... for update" de abajo) — NUNCA se usa "if found" para esto
+  -- mas adelante en la fila: FOUND es una variable global de la funcion que
+  -- cualquier otro select/insert/for posterior (la busqueda de categoria, el
+  -- loop de validacion de presentaciones) pisa sin avisar, y entonces "if
+  -- found" terminaria preguntando por el resultado de ESE otro comando, no
+  -- por si el producto existia.
+  v_producto_existia    boolean;
   v_producto_id         uuid;
   v_accion              text;
   v_mensaje             text;
@@ -102,6 +88,7 @@ begin
       end if;
 
       select * into v_existente from public.productos where sku = v_sku for update;
+      v_producto_existia := found; -- capturado YA, antes de que otro comando pise FOUND
 
       v_nombre            := nullif(btrim(coalesce(v_fila->>'nombre', '')), '');
       v_categoria         := nullif(btrim(coalesce(v_fila->>'categoria', '')), '');
@@ -185,7 +172,7 @@ begin
         end loop;
       end if;
 
-      if found then
+      if v_producto_existia then
         -- ── ACTUALIZAR: celda vacia (NULL aqui) = no tocar esa columna ──
         v_producto_id := v_existente.id;
 
@@ -281,3 +268,4 @@ begin
   return v_resultados;
 end;
 $$;
+
