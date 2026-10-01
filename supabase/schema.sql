@@ -2021,10 +2021,16 @@ begin
 
         -- El stock nunca se pisa en silencio: si cambio, pasa por
         -- ajustar_stock() para que quede su movimiento en el kardex.
+        -- El cast ::numeric explicito es necesario: productos.stock_actual
+        -- es "double precision" y ajustar_stock espera "numeric" — restar
+        -- numeric - double precision da double precision, y Postgres no lo
+        -- castea solo de vuelta a numeric al resolver la llamada (sale
+        -- "function ajustar_stock(uuid, double precision, ...) does not
+        -- exist" aunque la funcion si existe, con otro tipo en ese parametro).
         if v_stock_actual is not null and v_stock_actual <> v_existente.stock_actual then
           perform public.ajustar_stock(
             v_producto_id,
-            v_stock_actual - v_existente.stock_actual,
+            (v_stock_actual - v_existente.stock_actual)::numeric,
             'ajuste',
             'Importacion masiva de inventario'
           );
