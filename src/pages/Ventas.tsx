@@ -11,6 +11,7 @@ import {
   Download,
   MessageCircle,
   Bluetooth,
+  ArrowLeftRight,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { getNegocio, useNegocio, etiquetaDocumento } from '@/config/negocio'
@@ -291,6 +292,54 @@ export function Ventas() {
   useEffect(() => {
     cargar()
   }, [cargar])
+
+  // ── Tiempo real: sin esto, una venta hecha DESPUES de abrir esta pantalla
+  //    (desde este dispositivo u otro) nunca aparecia hasta cambiar un filtro
+  //    o recargar la pagina entera — mientras que Resumen (Dashboard) si se
+  //    actualizaba solo porque usa useVentasRealtime(). Se parchea el estado
+  //    local en vez de volver a pedir toda la lista, para no mostrar un
+  //    spinner de carga en cada venta nueva. El INSERT se filtra con las
+  //    MISMAS condiciones que la consulta de "cargar" (fecha/metodo/cajero)
+  //    para no mostrar una fila que no deberia estar bajo los filtros
+  //    activos; el UPDATE (anular/editar/cambiar forma de pago) siempre se
+  //    refleja si la venta ya estaba en la lista.
+  useEffect(() => {
+    function coincideFiltros(v: Venta): boolean {
+      if (v.creado_en < `${desde}T00:00:00` || v.creado_en > `${hasta}T23:59:59.999`) return false
+      if (metodo && v.metodo !== metodo) return false
+      if (esAdmin && cajeroId && v.cajero_id !== cajeroId) return false
+      return true
+    }
+
+    const canal = supabase
+      .channel('rt-ventas-historial')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ventas' },
+        (payload) => {
+          const v = payload.new as Venta
+          if (!coincideFiltros(v)) return
+          setVentas((prev) => {
+            if (prev.some((x) => x.id === v.id)) return prev
+            const siguiente = [v, ...prev]
+            return siguiente.length > 3000 ? siguiente.slice(0, 3000) : siguiente
+          })
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'ventas' },
+        (payload) => {
+          const v = payload.new as Venta
+          setVentas((prev) => prev.map((x) => (x.id === v.id ? v : x)))
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(canal)
+    }
+  }, [desde, hasta, metodo, cajeroId, esAdmin])
 
   const filtradas = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -839,6 +888,10 @@ function TicketReprint({
   const [waAbierto, setWaAbierto] = useState(false)
   const [telWA, setTelWA] = useState('')
   const [btImprimiendo, setBtImprimiendo] = useState(false)
+  const [cambiarPagoAbierto, setCambiarPagoAbierto] = useState(false)
+  const [metodoNuevo, setMetodoNuevo] = useState<'efectivo' | 'yape' | null>(null)
+  const [motivoCambioPago, setMotivoCambioPago] = useState('')
+  const [cambiandoPago, setCambiandoPago] = useState(false)
 
   useEffect(() => {
     if (!venta) return
@@ -847,6 +900,9 @@ function TicketReprint({
     setTelWA('')
     setAnularAbierto(false)
     setMotivoAnular('')
+    setCambiarPagoAbierto(false)
+    setMetodoNuevo(null)
+    setMotivoCambioPago('')
     cargarDetalle()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venta])
@@ -886,6 +942,34 @@ function TicketReprint({
     toast.exito(`Comprobante #${venta.numero} anulado`)
     setAnularAbierto(false)
     onAnulada()
+  }
+
+  // Correccion rapida del metodo de pago (ej. se marco Yape por error y fue
+  // en efectivo) — no toca productos/stock, solo mueve el monto de una
+  // columna de caja a la otra (ver cambiar_metodo_pago_venta). Solo aplica
+  // entre efectivo/yape; ventas mixtas o al fiado no muestran este boton.
+  async function cambiarMetodoPago() {
+    if (!venta || !metodoNuevo) return
+    if (!motivoCambioPago.trim()) {
+      toast.error('Indica el motivo del cambio.')
+      return
+    }
+    setCambiandoPago(true)
+    const { error } = await supabase.rpc('cambiar_metodo_pago_venta', {
+      p_venta_id: venta.id,
+      p_metodo_nuevo: metodoNuevo,
+      p_motivo: motivoCambioPago.trim(),
+    })
+    setCambiandoPago(false)
+    if (error) {
+      toast.error(error.message || 'No se pudo cambiar la forma de pago')
+      return
+    }
+    toast.exito(`Comprobante #${venta.numero}: forma de pago actualizada a ${ETIQUETA_PAGO[metodoNuevo]}`)
+    setCambiarPagoAbierto(false)
+    setMetodoNuevo(null)
+    setMotivoCambioPago('')
+    onAnulada() // mismo callback que anular/editar: recarga lista + caja
   }
 
   // Un solo objeto de datos para imprimir y para WhatsApp: evita que el
@@ -974,6 +1058,50 @@ function TicketReprint({
               </Button>
             </div>
           </div>
+        ) : cambiarPagoAbierto ? (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              {(['efectivo', 'yape'] as const)
+                .filter((m) => m !== venta.metodo)
+                .map((m) => (
+                  <Button
+                    key={m}
+                    variant={metodoNuevo === m ? 'secondary' : 'outline'}
+                    className="flex-1"
+                    onClick={() => setMetodoNuevo(m)}
+                    disabled={cambiandoPago}
+                  >
+                    {ETIQUETA_PAGO[m]}
+                  </Button>
+                ))}
+            </div>
+            <input
+              className="input"
+              value={motivoCambioPago}
+              onChange={(e) => setMotivoCambioPago(e.target.value)}
+              placeholder="Motivo del cambio (obligatorio)"
+              onKeyDown={(e) => e.key === 'Enter' && cambiarMetodoPago()}
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setCambiarPagoAbierto(false)}
+                disabled={cambiandoPago}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={cambiarMetodoPago}
+                loading={cambiandoPago}
+                disabled={!metodoNuevo || !motivoCambioPago.trim()}
+              >
+                <ArrowLeftRight className="size-4" /> Confirmar cambio
+              </Button>
+            </div>
+          </div>
         ) : (
           <div className="space-y-2">
             <div className="flex gap-2">
@@ -992,6 +1120,16 @@ function TicketReprint({
                 </Button>
               )}
             </div>
+            {!venta.anulada && (venta.metodo === 'efectivo' || venta.metodo === 'yape') && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setCambiarPagoAbierto(true)}
+                disabled={cargando}
+              >
+                <ArrowLeftRight className="size-4" /> Cambiar forma de pago
+              </Button>
+            )}
             <div className="flex gap-2">
               {!venta.anulada && (
                 <Button variant="outline" className="flex-1" onClick={() => setEditarAbierto(true)} disabled={cargando}>

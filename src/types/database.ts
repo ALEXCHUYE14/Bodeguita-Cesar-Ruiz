@@ -342,6 +342,15 @@ export interface Database {
         }
         Returns: Venta
       }
+      /** Correccion rapida: cambia el metodo de pago de una venta de un solo metodo entre 'efectivo' y 'yape', sin tocar productos. Ver cambiar_metodo_pago_venta en supabase/schema.sql. */
+      cambiar_metodo_pago_venta: {
+        Args: {
+          p_venta_id: string
+          p_metodo_nuevo: 'efectivo' | 'yape'
+          p_motivo: string
+        }
+        Returns: Venta
+      }
       registrar_cargo_fiado: {
         Args: { p_cliente_id: string; p_monto: number }
         Returns: ClienteCredito
