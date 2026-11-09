@@ -51,17 +51,26 @@ export function Login() {
         aria-hidden="true"
         className="relative hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
       >
-        {/* Imagen de la tienda como textura de fondo — desaturada y muy
-            tenue a proposito: tienda.png hoy es el mismo logo (no una foto
-            del local), así que a color y a toda intensidad se veria como un
-            logo gigante y borroso compitiendo con el ticket. El degradado
-            ink-800→ink-950 de arriba queda como base solida: si el archivo
-            no carga, el panel se ve igual de bien, nunca en blanco/roto.
+        {/* Imagen de la tienda como marca de agua, anclada a la esquina
+            vacia inferior izquierda (no al centro del panel, donde ya estan
+            el titulo y el ticket). Un <img> con ancho fijo da control
+            exacto del tamano/posicion — un background-size:cover centrado
+            quedaba demasiado chico y transparente ahi para notarse.
+            tienda.png hoy es el mismo logo (no una foto del local): se deja
+            en escala de grises para que se lea como textura de marca y no
+            como un sticker a color encima del degradado. El degradado
+            ink-800→ink-950 del panel sigue de base: si el archivo no carga,
+            el "onError" lo oculta solo y el panel se ve igual de bien.
             Cuando haya una foto real del local, basta con reemplazar ese
-            mismo archivo — subir estas clases de opacity/grayscale es
-            entonces un simple ajuste de gusto, no un cambio de logica. */}
-        <div
-          className="absolute inset-0 -z-10 bg-[url('/img/tienda.png')] bg-cover bg-center opacity-[0.14] grayscale"
+            mismo archivo (y si se quiere, subir opacity/quitar grayscale). */}
+        <img
+          src="/img/tienda.png"
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-16 -left-16 -z-10 w-[30rem] -rotate-6 object-contain opacity-80 grayscale"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+          }}
         />
 
         {/* Identidad */}
