@@ -49,25 +49,45 @@ export function Login() {
       ════════════════════════════════════════════════════════════════════ */}
       <aside
         aria-hidden="true"
-        className="relative hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
+        className="relative isolate hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
       >
+        {/* "isolate" arriba es lo que faltaba: sin el, este <aside> no forma
+            su propio contexto de apilamiento, y el z-index negativo de la
+            imagen de abajo la mandaba detras del PROPIO FONDO DEGRADADO del
+            panel (no solo detras del texto) — por eso era invisible sin
+            importar la opacidad. Con "isolate", el degradado pasa a ser la
+            base de ese contexto y la imagen con -z-10 queda correctamente
+            por encima de el, debajo del contenido normal. */}
+
         {/* Imagen de la tienda como marca de agua, anclada a la esquina
             vacia inferior izquierda (no al centro del panel, donde ya estan
             el titulo y el ticket). Un <img> con ancho fijo da control
             exacto del tamano/posicion — un background-size:cover centrado
             quedaba demasiado chico y transparente ahi para notarse.
-            tienda.png hoy es el mismo logo (no una foto del local): se deja
-            en escala de grises para que se lea como textura de marca y no
-            como un sticker a color encima del degradado. El degradado
-            ink-800→ink-950 del panel sigue de base: si el archivo no carga,
-            el "onError" lo oculta solo y el panel se ve igual de bien.
-            Cuando haya una foto real del local, basta con reemplazar ese
-            mismo archivo (y si se quiere, subir opacity/quitar grayscale). */}
+
+            Usa tienda-marca.png (derivado de tienda.png, ver
+            scripts/process_logo.py de referencia) en vez del archivo
+            original: tienda.png tiene el fondo pintado de blanco opaco, no
+            transparente — usado tal cual se veia como una tarjeta blanca
+            rotada encima del ticket. tienda-marca.png le quita ese blanco
+            de fondo con flood-fill desde las esquinas (conservando el texto
+            blanco QUE ESTA DENTRO del logo, como "COMERCIAL", porque no
+            esta conectado al fondo) y recorta el sobrante transparente.
+
+            Se deja en escala de grises para que se lea como textura de
+            marca y no como un sticker a color encima del degradado. El
+            degradado ink-800→ink-950 del panel sigue de base: si el
+            archivo no carga, el "onError" lo oculta solo y el panel se ve
+            igual de bien.
+
+            Cuando haya una FOTO real del local (no el logo), avisa para
+            cambiar esta referencia a esa foto directamente — con una foto
+            real no hace falta el recorte de transparencia, cover alcanza. */}
         <img
-          src="/img/tienda.png"
+          src="/img/tienda-marca.png"
           alt=""
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-16 -left-16 -z-10 w-[30rem] -rotate-6 object-contain opacity-80 grayscale"
+          className="pointer-events-none absolute bottom-24 left-0 -z-10 w-[22rem] -rotate-2 object-contain opacity-80 grayscale"
           onError={(e) => {
             e.currentTarget.style.display = 'none'
           }}
