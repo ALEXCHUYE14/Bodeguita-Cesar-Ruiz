@@ -51,6 +51,19 @@ export function Login() {
         aria-hidden="true"
         className="relative hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
       >
+        {/* Imagen de la tienda como textura de fondo — desaturada y muy
+            tenue a proposito: tienda.png hoy es el mismo logo (no una foto
+            del local), así que a color y a toda intensidad se veria como un
+            logo gigante y borroso compitiendo con el ticket. El degradado
+            ink-800→ink-950 de arriba queda como base solida: si el archivo
+            no carga, el panel se ve igual de bien, nunca en blanco/roto.
+            Cuando haya una foto real del local, basta con reemplazar ese
+            mismo archivo — subir estas clases de opacity/grayscale es
+            entonces un simple ajuste de gusto, no un cambio de logica. */}
+        <div
+          className="absolute inset-0 -z-10 bg-[url('/img/tienda.png')] bg-cover bg-center opacity-[0.14] grayscale"
+        />
+
         {/* Identidad */}
         <div className="flex items-center gap-3.5">
           <img
