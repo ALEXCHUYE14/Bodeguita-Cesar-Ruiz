@@ -1,24 +1,21 @@
 import { useState, type FormEvent } from 'react'
-import { Eye, EyeOff, LogIn, MessageCircle } from 'lucide-react'
+import { Eye, EyeOff, Lock, LogIn, Mail, MessageCircle, Check, AlertCircle } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
 import { BRAND } from '@/config/brand'
 import { useNegocio } from '@/config/negocio'
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Propiedades CSS de la columna izquierda (imagen de fondo).
-   Definidas fuera del componente para que React no las recree en cada render.
-   El layout (width/height/display) lo controla el CSS class .login-left-col.
-───────────────────────────────────────────────────────────────────────────── */
-const leftColBgStyle: React.CSSProperties = {
-  backgroundImage: "url('/img/tienda.png')",
-  backgroundSize: 'cover',
-  backgroundPosition: 'center',
-  backgroundRepeat: 'no-repeat',
-  display: 'block',
-  position: 'relative',
-  overflow: 'hidden',
-}
+/**
+ * Ticket de ejemplo para el panel de marca — usa nombres de productos reales
+ * del catalogo (ver Inventario) para que el mockup se sienta del negocio real
+ * y no como un relleno generico. Puramente decorativo: no toca ningun dato.
+ */
+const TICKET_DEMO = [
+  { cant: '1x', nombre: 'Aruba 1L', monto: '3.50' },
+  { cant: '2x', nombre: 'Papi Ricas', monto: '2.00' },
+  { cant: '1x', nombre: 'Agua San Mateo', monto: '1.50' },
+]
+const TICKET_TOTAL = '7.00'
 
 export function Login() {
   const { signIn } = useAuth()
@@ -43,256 +40,195 @@ export function Login() {
   }
 
   return (
-    /*
-     * Layout Split-Screen:
-     *   Desktop (≥769px) → columna izquierda 50vw (imagen) + columna derecha 50vw (formulario)
-     *   Móvil   (≤768px) → columna izquierda display:none, formulario ocupa 100%
-     */
-    <div style={{ display: 'flex', minHeight: '100dvh', flexDirection: 'row' }}>
-
-      {/* ════════════════════════════════════════════════════════════════════════
-          COLUMNA IZQUIERDA — Imagen de fondo completa (solo desktop)
-          Layout controlado por .login-left-col; background por leftColBgStyle.
-          display:block con position:relative para contenido absolutamente posicionado.
-      ════════════════════════════════════════════════════════════════════════ */}
-      <div aria-hidden="true" className="login-left-col" style={leftColBgStyle}>
-        {/* Gradient overlay para contraste del texto */}
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'linear-gradient(to top, rgba(14,14,13,0.92) 0%, rgba(14,14,13,0.22) 55%, rgba(14,14,13,0.04) 100%)',
-        }} />
-        {/* Texto de marca en la parte inferior */}
-        <div style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          padding: '60px 40px',
-          textAlign: 'center',
-          color: '#ffffff',
-          zIndex: 1,
-        }}>
-          <h2 style={{
-            fontFamily: '"Bricolage Grotesque", sans-serif',
-            fontSize: '2.4rem',
-            fontWeight: 900,
-            letterSpacing: '-0.5px',
-            lineHeight: 1.2,
-            textShadow: '0 2px 12px rgba(0,0,0,0.4)',
-            margin: 0,
-          }}>
+    <div className="flex min-h-dvh flex-col lg:flex-row">
+      {/* ════════════════════════════════════════════════════════════════════
+          PANEL DE MARCA — solo desktop (≥1024px). En vez de una foto de
+          stock con texto superpuesto, el elemento central es un ticket de
+          venta en miniatura: es literalmente lo que este sistema hace, con
+          productos reales del catalogo — no un generico "hero" de marketing.
+      ════════════════════════════════════════════════════════════════════ */}
+      <aside
+        aria-hidden="true"
+        className="relative hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
+      >
+        {/* Identidad */}
+        <div className="flex items-center gap-3.5">
+          <img
+            src="/img/logo.png"
+            alt=""
+            className="size-12 rounded-xl bg-white object-contain p-1.5 shadow-pop"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+          <span className="font-display text-lg font-bold tracking-tight text-white">
             {nombreNegocio}
-          </h2>
-          <p style={{ marginTop: '10px', fontSize: '1rem', opacity: 0.7, fontWeight: 500 }}>
-            Sistema de Gestión y Punto de Venta
-          </p>
-          <div style={{ width: '48px', height: '1px', background: 'rgba(255,255,255,0.3)', margin: '20px auto' }} />
-          <p style={{ fontSize: '0.85rem', opacity: 0.5, fontStyle: 'italic' }}>
-            "Cada venta cuenta, cada cliente importa."
-          </p>
+          </span>
         </div>
-      </div>
 
-      {/*
-       * ── Media queries ───────────────────────────────────────────────────────
-       *  .login-left-col:
-       *    Móvil   (≤768px) → display:none !important  — no ocupa nada de espacio
-       *    Desktop (≥769px) → display:block !important, width:50vw, height:100vh
-       *
-       *  .login-input:
-       *    font-size ≥16px para prevenir zoom automático en Safari/iOS al enfocar
-       */}
-      <style>{`
-        .login-left-col {
-          display: none !important;
-        }
-        @media (min-width: 769px) {
-          .login-left-col {
-            display: block !important;
-            width: 50vw;
-            min-width: 50vw;
-            flex-shrink: 0;
-            height: 100vh;
-          }
-        }
-        .login-input { font-size: 16px !important; }
-      `}</style>
+        {/* Mensaje + ticket — en flujo normal (nunca se superponen, pase lo
+            que pase con el alto/ancho de la ventana). */}
+        <div className="flex-1">
+          <div className="mt-10 max-w-sm">
+            <h1 className="font-display text-[2.75rem] font-extrabold leading-[1.05] tracking-tight text-white">
+              Tu negocio,
+              <br />
+              bajo control.
+            </h1>
+            <p className="mt-4 text-[0.95rem] leading-relaxed text-white/55">
+              Ventas, inventario y caja en un mismo lugar — pensado para el
+              ritmo de la tienda, no de una oficina.
+            </p>
+          </div>
 
-      {/* ════════════════════════════════════════════════════════════════════════
-          COLUMNA DERECHA — Formulario de acceso (siempre visible)
-          Dos zonas:
-            1. Zona de formulario (flex-1, centrado verticalmente, scroll si falta espacio)
-            2. Zona de soporte WhatsApp (altura fija, siempre visible al fondo)
-      ════════════════════════════════════════════════════════════════════════ */}
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: '100dvh',
-        backgroundColor: '#f8f9fa',
-      }}>
+          {/* Ticket mockup */}
+          <div className="ml-auto mt-8 w-64 -rotate-2 rounded-2xl bg-white p-5 shadow-pop">
+            <div className="flex items-center justify-between">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-ink-400">
+                Comprobante
+              </p>
+              <span className="flex items-center gap-1 rounded-full bg-accent-50 px-2 py-0.5 text-[0.65rem] font-bold text-accent-700">
+                <Check className="size-3" strokeWidth={3} /> Pagado
+              </span>
+            </div>
+            <div className="mt-3 space-y-1.5 border-t border-dashed border-ink-200 pt-3">
+              {TICKET_DEMO.map((l) => (
+                <div key={l.nombre} className="flex justify-between gap-2 text-[0.8rem] text-ink-600">
+                  <span className="min-w-0 truncate">
+                    {l.cant} {l.nombre}
+                  </span>
+                  <span className="tabular shrink-0 text-ink-900">S/ {l.monto}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex justify-between border-t border-ink-100 pt-3">
+              <span className="text-sm font-bold text-ink-900">Total</span>
+              <span className="tabular text-sm font-bold text-ink-900">S/ {TICKET_TOTAL}</span>
+            </div>
+          </div>
+        </div>
 
-        {/* ── Zona 1: formulario ── */}
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '2rem 1.5rem 1rem',
-          overflowY: 'auto',
-          minHeight: 0,
-        }}>
+        {/* pie decorativo */}
+        <p className="text-xs font-medium text-white/30">
+          Sistema de gestión y punto de venta
+        </p>
+      </aside>
 
-          {/* Tarjeta profesional del formulario */}
-          <div style={{
-            width: '100%',
-            maxWidth: '400px',
-            backgroundColor: '#ffffff',
-            border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.05)',
-            padding: '2rem',
-          }}>
+      {/* ════════════════════════════════════════════════════════════════════
+          PANEL DE ACCESO — siempre visible. Mismo fondo con textura (bg-grain)
+          que el resto de la app (ver AppShell) para que el login se sienta
+          parte del mismo sistema, no una pagina aparte.
+      ════════════════════════════════════════════════════════════════════ */}
+      <div className="flex min-h-dvh flex-1 flex-col bg-ink-50 bg-grain">
+        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-10">
+          <div className="w-full max-w-[25rem]">
 
-            {/* Logo interno superior — centrado con esquinas redondeadas */}
-            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+            {/* Marca compacta — solo cuando el panel de la izquierda esta oculto */}
+            <div className="mb-6 flex items-center gap-3 lg:hidden">
               <img
                 src="/img/logo.png"
-                alt={nombreNegocio}
-                style={{
-                  maxHeight: '80px',
-                  width: 'auto',
-                  borderRadius: '12px',
-                  display: 'inline-block',
-                  objectFit: 'cover',
-                }}
+                alt=""
+                className="size-11 shrink-0 rounded-xl border border-ink-100 bg-white object-contain p-1 shadow-soft"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none'
                 }}
               />
-            </div>
-
-            {/* Encabezado de marca */}
-            <div style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
-              <h1 style={{
-                fontFamily: '"Bricolage Grotesque", sans-serif',
-                fontSize: '1.6rem',
-                fontWeight: 800,
-                letterSpacing: '-0.3px',
-                color: '#0e0e0d',
-                margin: '0 0 6px 0',
-              }}>
+              <span className="font-display text-base font-bold tracking-tight text-ink-900">
                 {nombreNegocio}
-              </h1>
-              <p style={{ fontSize: '0.875rem', color: '#888', margin: 0 }}>
-                Ingresa tus credenciales para continuar
-              </p>
+              </span>
             </div>
 
-            {/* Formulario de acceso */}
-            <form onSubmit={onSubmit} className="space-y-4">
-              <div>
-                <label className="label mb-1.5 block">Correo electrónico</label>
-                <input
-                  type="email"
-                  className="input login-input"
-                  style={{ fontSize: '16px' }}
-                  placeholder="tucorreo@ejemplo.com"
-                  autoComplete="username"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="label mb-1.5 block">Contraseña</label>
-                <div className="relative">
-                  <input
-                    type={verPass ? 'text' : 'password'}
-                    className="input pr-11 login-input"
-                    style={{ fontSize: '16px' }}
-                    placeholder="••••••••"
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setVerPass((v) => !v)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-600 transition-colors"
-                    aria-label={verPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                  >
-                    {verPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700 animate-fade-up">
-                  {error}
-                </div>
-              )}
-
-              <Button type="submit" size="lg" loading={cargando} className="w-full">
-                <LogIn className="size-4" />
-                Ingresar al sistema
-              </Button>
-
-              {reintentando && (
-                <p className="text-center text-xs text-ink-400 animate-fade-up">
-                  El servidor está reactivándose, esto puede tardar unos segundos...
+            <div className="animate-fade-up rounded-2xl border border-ink-100 bg-white p-7 shadow-pop sm:p-8">
+              <div className="mb-6">
+                <h1 className="font-display text-xl font-bold tracking-tight text-ink-900">
+                  Inicia sesión
+                </h1>
+                <p className="mt-1 text-sm text-ink-400">
+                  Ingresa tus credenciales para continuar
                 </p>
-              )}
-            </form>
-          </div>
-        </div>
+              </div>
 
-        {/* ── Zona 2: soporte WhatsApp — siempre visible al fondo ── */}
-        <div style={{
-          flexShrink: 0,
-          borderTop: '1px solid #e2e8f0',
-          padding: '1.25rem 1.5rem',
-          textAlign: 'center',
-          backgroundColor: '#f8f9fa',
-        }}>
-          <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: '#aaa' }}>
-            ¿Problemas para acceder?
-          </p>
-          <a
-            href={WA_SOPORTE}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 20px',
-              borderRadius: '10px',
-              border: '1px solid #bbf7d0',
-              backgroundColor: '#f0fdf4',
-              color: '#15803d',
-              fontSize: '0.8rem',
-              fontWeight: 600,
-              textDecoration: 'none',
-              transition: 'background-color 0.15s',
-            }}
-            onMouseEnter={(e) => {
-              ;(e.currentTarget as HTMLAnchorElement).style.backgroundColor = '#dcfce7'
-            }}
-            onMouseLeave={(e) => {
-              ;(e.currentTarget as HTMLAnchorElement).style.backgroundColor = '#f0fdf4'
-            }}
-          >
-            <MessageCircle size={14} />
-            Contactar soporte por WhatsApp
-          </a>
-          <p style={{ marginTop: '12px', fontSize: '0.7rem', color: '#bbb' }}>
-            Acceso exclusivo para personal autorizado · {nombreNegocio}
-          </p>
+              <form onSubmit={onSubmit} className="space-y-4">
+                <div>
+                  <label htmlFor="login-email" className="label mb-1.5 block">
+                    Correo electrónico
+                  </label>
+                  <div className="relative">
+                    <Mail className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-ink-300" />
+                    <input
+                      id="login-email"
+                      type="email"
+                      className="input pl-10 text-base"
+                      placeholder="tucorreo@ejemplo.com"
+                      autoComplete="username"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="login-password" className="label mb-1.5 block">
+                    Contraseña
+                  </label>
+                  <div className="relative">
+                    <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-ink-300" />
+                    <input
+                      id="login-password"
+                      type={verPass ? 'text' : 'password'}
+                      className="input pl-10 pr-11 text-base"
+                      placeholder="••••••••"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setVerPass((v) => !v)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-600"
+                      aria-label={verPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    >
+                      {verPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700 animate-fade-up">
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <Button type="submit" size="lg" loading={cargando} className="w-full">
+                  <LogIn className="size-4" />
+                  Ingresar al sistema
+                </Button>
+
+                {reintentando && (
+                  <p className="text-center text-xs text-ink-400 animate-fade-up">
+                    El servidor está reactivándose, esto puede tardar unos segundos…
+                  </p>
+                )}
+              </form>
+            </div>
+
+            {/* Soporte */}
+            <div className="mt-6 text-center">
+              <p className="mb-2 text-xs text-ink-400">¿Problemas para acceder?</p>
+              <a
+                href={WA_SOPORTE}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-accent-100 bg-accent-50 px-4 py-2 text-xs font-semibold text-accent-700 transition-colors hover:bg-accent-100"
+              >
+                <MessageCircle className="size-3.5" />
+                Contactar soporte por WhatsApp
+              </a>
+            </div>
+          </div>
         </div>
       </div>
     </div>
