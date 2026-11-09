@@ -49,7 +49,7 @@ export function Login() {
       ════════════════════════════════════════════════════════════════════ */}
       <aside
         aria-hidden="true"
-        className="relative isolate hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-ink-800 via-ink-900 to-ink-950 lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
+        className="relative isolate hidden w-1/2 shrink-0 overflow-hidden bg-gradient-to-br from-[#0f5024] via-[#1a1512] to-[#5c0f0f] lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12"
       >
         {/* "isolate" arriba es lo que faltaba: sin el, este <aside> no forma
             su propio contexto de apilamiento, y el z-index negativo de la
@@ -57,7 +57,16 @@ export function Login() {
             panel (no solo detras del texto) — por eso era invisible sin
             importar la opacidad. Con "isolate", el degradado pasa a ser la
             base de ese contexto y la imagen con -z-10 queda correctamente
-            por encima de el, debajo del contenido normal. */}
+            por encima de el, debajo del contenido normal.
+
+            Los 3 colores del degradado (verde→neutro oscuro→rojo) salen de
+            muestrear los pixeles reales de tienda-marca.png (ver
+            scripts/process_logo.py), no son un verde/rojo inventados — por
+            eso combinan con el logo en vez de competir con el. El paso
+            intermedio casi negro evita que verde y rojo se mezclen en un
+            marron sucio en la transicion (complementarios puros si se
+            mezclan directo), y mantiene el contraste para el texto blanco
+            en cualquier punto del degradado. */}
 
         {/* Imagen de la tienda como marca de agua, anclada a la esquina
             vacia inferior izquierda (no al centro del panel, donde ya estan
@@ -74,11 +83,10 @@ export function Login() {
             blanco QUE ESTA DENTRO del logo, como "COMERCIAL", porque no
             esta conectado al fondo) y recorta el sobrante transparente.
 
-            Se deja en escala de grises para que se lea como textura de
-            marca y no como un sticker a color encima del degradado. El
-            degradado ink-800→ink-950 del panel sigue de base: si el
-            archivo no carga, el "onError" lo oculta solo y el panel se ve
-            igual de bien.
+            A color completo (sin desaturar): el degradado de atras ya sale
+            de sus propios colores (ver nota de arriba), asi que combinan en
+            vez de chocar. Si el archivo no carga, el "onError" lo oculta
+            solo y el panel se ve igual de bien con el degradado de base.
 
             Cuando haya una FOTO real del local (no el logo), avisa para
             cambiar esta referencia a esa foto directamente — con una foto
@@ -87,7 +95,7 @@ export function Login() {
           src="/img/tienda-marca.png"
           alt=""
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-24 left-0 -z-10 w-[22rem] -rotate-2 object-contain opacity-80 grayscale"
+          className="pointer-events-none absolute bottom-24 left-0 -z-10 w-[22rem] -rotate-2 object-contain opacity-95 drop-shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
           onError={(e) => {
             e.currentTarget.style.display = 'none'
           }}
