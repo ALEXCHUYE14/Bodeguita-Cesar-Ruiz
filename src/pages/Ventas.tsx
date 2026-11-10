@@ -30,6 +30,8 @@ import {
   ymd,
   cx,
   cantidad,
+  inicioDia,
+  finDia,
 } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
 import {
@@ -130,8 +132,8 @@ function ReporteMetodoPago() {
       .from('ventas')
       .select('metodo, total')
       .eq('anulada', false)
-      .gte('creado_en', `${desde}T00:00:00`)
-      .lte('creado_en', `${hasta}T23:59:59.999`)
+      .gte('creado_en', inicioDia(desde).toISOString())
+      .lte('creado_en', finDia(hasta).toISOString())
       .limit(20000)
 
     if (error) {
@@ -272,8 +274,8 @@ export function Ventas() {
     let query = supabase
       .from('ventas')
       .select('*')
-      .gte('creado_en', `${desde}T00:00:00`)
-      .lte('creado_en', `${hasta}T23:59:59.999`)
+      .gte('creado_en', inicioDia(desde).toISOString())
+      .lte('creado_en', finDia(hasta).toISOString())
       .order('numero', { ascending: false })
       // 3000 (antes 300): con reportes por quincena/mes un tope bajo
       // truncaba silenciosamente el resumen y el CSV exportado.
@@ -305,7 +307,7 @@ export function Ventas() {
   //    refleja si la venta ya estaba en la lista.
   useEffect(() => {
     function coincideFiltros(v: Venta): boolean {
-      if (v.creado_en < `${desde}T00:00:00` || v.creado_en > `${hasta}T23:59:59.999`) return false
+      if (v.creado_en < inicioDia(desde).toISOString() || v.creado_en > finDia(hasta).toISOString()) return false
       if (metodo && v.metodo !== metodo) return false
       if (esAdmin && cajeroId && v.cajero_id !== cajeroId) return false
       return true

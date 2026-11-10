@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Download, TrendingUp, AlertTriangle, ChevronDown, PackageX } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Card, Spinner, Button } from '@/components/ui/Button'
-import { money, fechaCorta, ymd, cx } from '@/utils/format'
+import { money, fechaCorta, ymd, cx, inicioDia, finDia } from '@/utils/format'
 import { descargarCSV } from '@/utils/csv'
 
 interface FilaRentabilidad {
@@ -58,8 +58,8 @@ export function Rentabilidad() {
         .from('detalle_ventas')
         .select('producto_id, producto_nombre, cantidad, unidades, subtotal, ventas!inner(creado_en,anulada)')
         .eq('ventas.anulada', false)
-        .gte('ventas.creado_en', `${desde}T00:00:00`)
-        .lte('ventas.creado_en', `${hasta}T23:59:59.999`)
+        .gte('ventas.creado_en', inicioDia(desde).toISOString())
+        .lte('ventas.creado_en', finDia(hasta).toISOString())
         .limit(20000)
 
       if (error) throw error
